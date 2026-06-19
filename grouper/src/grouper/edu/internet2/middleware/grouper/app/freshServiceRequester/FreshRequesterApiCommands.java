@@ -35,8 +35,8 @@ public class FreshRequesterApiCommands {
     GrouperStartup.startup();
     
     try {
-      String configId = "freshServiceDev";
-//    String configId = "freshserviceTest";
+//      String configId = "freshServiceDev";
+    String configId = "freshserviceRequester";
     
 //    FreshRequesterGroup group = new FreshRequesterGroup();
 //    group.setName("Test Grouper Update");
