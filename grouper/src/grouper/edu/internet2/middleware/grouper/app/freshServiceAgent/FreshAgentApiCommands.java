@@ -31,10 +31,10 @@ public class FreshAgentApiCommands {
 
   public static void main(String[] args) {
 
-    GrouperStartup.startup();
+//    GrouperStartup.startup();
 
-    try {
-      String configId = "freshserviceRequester";
+//    try {
+//      String configId = "freshserviceRequester";
 
 //      FreshAgentGroup group = new FreshAgentGroup();
 //      group.setName("Agent Test 2");
@@ -58,10 +58,16 @@ public class FreshAgentApiCommands {
 
 //      deleteAgentGroup(configId, 194670L);
       
-    } catch (Exception e) {
-      System.out.println("Error: " + GrouperClientUtils.getFullStackTrace(e));
-    }
-    System.exit(0);
+//      List<FreshAgentUser> users = retrieveAgentUsers(configId, false);
+//      for (FreshAgentUser user : users) {
+//        System.out.println(user.toString());
+//      }
+//      System.out.println(users.size());
+      
+//    } catch (Exception e) {
+//      System.out.println("Error: " + GrouperClientUtils.getFullStackTrace(e));
+//    }
+//    System.exit(0);
   }
 
   private static JsonNode executeMethod(Map<String, Object> debugMap, String debugLabel,
