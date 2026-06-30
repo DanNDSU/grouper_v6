@@ -7,7 +7,6 @@ import java.util.Set;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import edu.internet2.middleware.grouper.app.provisioning.ProvisioningEntity;
@@ -224,6 +223,50 @@ public class FreshAgentUser {
    */
   public void setRolesJson(String rolesJson) {
     this.rolesJson = GrouperUtil.isBlank(rolesJson) ? null : rolesJson;
+  }
+
+  /**
+   * Whether this agent carries a non-empty roles array.
+   * @return true if rolesJson is present and is a non-empty JSON array
+   */
+  public boolean hasRoles() {
+    if (GrouperUtil.isBlank(this.rolesJson)) {
+      return false;
+    }
+    try {
+      JsonNode rolesNode = GrouperUtil.objectMapper.readTree(this.rolesJson);
+      return rolesNode != null && rolesNode.isArray() && rolesNode.size() > 0;
+    } catch (Exception e) {
+      // malformed json: treat as not having usable roles
+      return false;
+    }
+  }
+
+  /**
+   * Assign a single default Freshservice role to this agent, built from a role id
+   * and an assignment_scope. This produces a roles array of the form:
+   *   [ { "role_id": &lt;roleId&gt;, "assignment_scope": "&lt;assignmentScope&gt;" } ]
+   *
+   * Intended for brand new agents that do not already carry a roles array, since
+   * Freshservice requires a non-empty roles array on agent create.
+   *
+   * @param roleId the Freshservice role id (required)
+   * @param assignmentScope the assignment_scope (e.g. "entire_helpdesk"); if blank,
+   *   "entire_helpdesk" is used
+   */
+  public void applyDefaultRole(Long roleId, String assignmentScope) {
+    if (roleId == null) {
+      return;
+    }
+    ObjectNode roleNode = GrouperUtil.jsonJacksonNode();
+    roleNode.put("role_id", roleId.longValue());
+    roleNode.put("assignment_scope",
+        GrouperUtil.isBlank(assignmentScope) ? "entire_helpdesk" : assignmentScope.trim());
+
+    com.fasterxml.jackson.databind.node.ArrayNode rolesArray = GrouperUtil.jsonJacksonArrayNode();
+    rolesArray.add(roleNode);
+
+    this.rolesJson = GrouperUtil.jsonJacksonToString(rolesArray);
   }
 
   public Boolean getActive() {
@@ -541,39 +584,13 @@ public class FreshAgentUser {
       result.put("email", this.email);
     }
 
-    if (fieldNamesToSet == null || fieldNamesToSet.contains("jobTitle")) {
-      if (!GrouperUtil.isBlank(this.jobTitle)) {
-        result.put("job_title", this.jobTitle);
-      }
-    }
-    if (fieldNamesToSet == null || fieldNamesToSet.contains("workPhoneNumber")) {
-      if (!GrouperUtil.isBlank(this.workPhoneNumber)) {
-        result.put("work_phone_number", this.workPhoneNumber);
-      }
-    }
-    if (fieldNamesToSet == null || fieldNamesToSet.contains("departmentId")) {
-      if (this.departmentId != null) {
-        // Freshservice expects department_ids array
-        ArrayNode departmentIdsArray = GrouperUtil.jsonJacksonArrayNode();
-        departmentIdsArray.add(this.departmentId.longValue());
-        result.set("department_ids", departmentIdsArray);
-      }
-    }
-    if (fieldNamesToSet == null || fieldNamesToSet.contains("reportingManagerId")) {
-      if (this.reportingManagerId != null) {
-        result.put("reporting_manager_id", this.reportingManagerId);
-      }
-    }
-    if (fieldNamesToSet == null || fieldNamesToSet.contains("address")) {
-      if (!GrouperUtil.isBlank(this.address)) {
-        result.put("address", this.address);
-      }
-    }
-    if (fieldNamesToSet == null || fieldNamesToSet.contains("externalId")) {
-      if (!GrouperUtil.isBlank(this.externalId)) {
-        result.put("external_id", this.externalId);
-      }
-    }
+    // NOTE: This provisioner only writes the following Agent fields to Freshservice:
+    //   id, first_name, last_name, email, roles, custom_fields
+    // The model still carries jobTitle, workPhoneNumber, departmentId, reportingManagerId,
+    // address, externalId and active (read from GETs and used for matching/state), but they
+    // are intentionally NOT emitted into POST/PUT bodies. Sending unmanaged or read-only
+    // fields causes Freshservice to return HTTP 400 (readonly_field / invalid_field), so we
+    // build every write body from the explicit whitelist below.
 
     // roles array: only include when we have it and it is being set. Required by Freshservice on create.
     if (fieldNamesToSet == null || fieldNamesToSet.contains("roles")) {
@@ -635,12 +652,7 @@ public class FreshAgentUser {
         result.set("custom_fields", customFieldsNode);
       }
     }
-    if (fieldNamesToSet == null || fieldNamesToSet.contains("active")) {
-      if (this.active != null) {
-        result.put("active", this.active);
-      }
-    }
-    
+
     return result;
   }
   

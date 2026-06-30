@@ -266,38 +266,47 @@ public class FreshAgentTargetDao extends GrouperProvisionerTargetDaoBase {
     }
   }
   
-//  @Override
-//  public TargetDaoInsertEntityResponse insertEntity(TargetDaoInsertEntityRequest targetDaoInsertEntityRequest) {
-//    long startNanos = System.nanoTime();
-//    ProvisioningEntity targetEntity = targetDaoInsertEntityRequest.getTargetEntity();
-//
-//    try {
-//      FreshAgentConfiguration freshserviceConfiguration = (FreshAgentConfiguration) this.getGrouperProvisioner()
-//          .retrieveGrouperProvisioningConfiguration();
-//
-//      FreshAgentUser grouperAgentUser = FreshAgentUser.fromProvisioningEntity(targetEntity, null);
-//
-//      FreshAgentUser createdUser = FreshAgentApiCommands.createAgentUser(
-//          freshserviceConfiguration.getFreshserviceExternalSystemConfigId(), grouperAgentUser);
-//
-//      targetEntity.setId(String.valueOf(createdUser.getId()));
-//      targetEntity.setProvisioned(true);
-//
-//      for (ProvisioningObjectChange provisioningObjectChange : GrouperUtil.nonNull(targetEntity.getInternal_objectChanges())) {
-//        provisioningObjectChange.setProvisioned(true);
-//      }
-//
-//      return new TargetDaoInsertEntityResponse();
-//    } catch (Exception e) {
-//      targetEntity.setProvisioned(false);
-//      for (ProvisioningObjectChange provisioningObjectChange : GrouperUtil.nonNull(targetEntity.getInternal_objectChanges())) {
-//        provisioningObjectChange.setProvisioned(false);
-//      }
-//      throw e;
-//    } finally {
-//      this.addTargetDaoTimingInfo(new TargetDaoTimingInfo("insertEntity", startNanos));
-//    }
-//  }
+  @Override
+  public TargetDaoInsertEntityResponse insertEntity(TargetDaoInsertEntityRequest targetDaoInsertEntityRequest) {
+    long startNanos = System.nanoTime();
+    ProvisioningEntity targetEntity = targetDaoInsertEntityRequest.getTargetEntity();
+
+    try {
+      FreshAgentConfiguration freshserviceConfiguration = (FreshAgentConfiguration) this.getGrouperProvisioner()
+          .retrieveGrouperProvisioningConfiguration();
+
+      FreshAgentUser grouperAgentUser = FreshAgentUser.fromProvisioningEntity(targetEntity, null);
+
+      // Freshservice requires a non-empty roles array on agent create. If the
+      // entity does not already carry roles and a default role id is configured,
+      // assign the configured default role (role id + assignment scope).
+      if (!grouperAgentUser.hasRoles() && freshserviceConfiguration.getDefaultAgentRoleId() != null) {
+        grouperAgentUser.applyDefaultRole(
+            freshserviceConfiguration.getDefaultAgentRoleId(),
+            freshserviceConfiguration.getDefaultAgentRoleAssignmentScope());
+      }
+
+      FreshAgentUser createdUser = FreshAgentApiCommands.createAgentUser(
+          freshserviceConfiguration.getFreshserviceExternalSystemConfigId(), grouperAgentUser);
+
+      targetEntity.setId(String.valueOf(createdUser.getId()));
+      targetEntity.setProvisioned(true);
+
+      for (ProvisioningObjectChange provisioningObjectChange : GrouperUtil.nonNull(targetEntity.getInternal_objectChanges())) {
+        provisioningObjectChange.setProvisioned(true);
+      }
+
+      return new TargetDaoInsertEntityResponse();
+    } catch (Exception e) {
+      targetEntity.setProvisioned(false);
+      for (ProvisioningObjectChange provisioningObjectChange : GrouperUtil.nonNull(targetEntity.getInternal_objectChanges())) {
+        provisioningObjectChange.setProvisioned(false);
+      }
+      throw e;
+    } finally {
+      this.addTargetDaoTimingInfo(new TargetDaoTimingInfo("insertEntity", startNanos));
+    }
+  }
 
   @Override
   public TargetDaoUpdateEntityResponse updateEntity(TargetDaoUpdateEntityRequest targetDaoUpdateEntityRequest) {

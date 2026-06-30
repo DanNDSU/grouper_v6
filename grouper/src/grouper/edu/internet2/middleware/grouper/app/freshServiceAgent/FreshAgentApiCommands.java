@@ -1,6 +1,7 @@
 package edu.internet2.middleware.grouper.app.freshServiceAgent;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,13 +32,13 @@ public class FreshAgentApiCommands {
 
   public static void main(String[] args) {
 
-//    GrouperStartup.startup();
+    GrouperStartup.startup();
 
-//    try {
-//      String configId = "freshserviceRequester";
+    try {
+      String configId = "freshserviceRequester";
 
 //      FreshAgentGroup group = new FreshAgentGroup();
-//      group.setName("Agent Test 2");
+//      group.setName("Agent Test 1");
 //      group.setDescription("Testing for Freshservice Agent Provisioner");
 //      FreshAgentGroup returnGroup = createAgentGroup(configId, group);
 //      System.out.println(returnGroup.getId());
@@ -48,26 +49,44 @@ public class FreshAgentApiCommands {
 //      }
 
 //      FreshAgentGroup group = new FreshAgentGroup();
-//      group.setId(194669L);
-//      group.setName("Agent Test 1");
+//      group.setId(194734L);
 //      group.setDescription("Testing for Grouper Freshservice Agent Provisioner");
 //      Map<String, ProvisioningObjectChangeAction> fieldsToUpdate = new LinkedHashMap<String, ProvisioningObjectChangeAction>();
-//
 //      fieldsToUpdate.put("description", ProvisioningObjectChangeAction.valueOf("update"));
 //      updateAgentGroup(configId, group, fieldsToUpdate);
 
-//      deleteAgentGroup(configId, 194670L);
+//      FreshAgentUser user = new FreshAgentUser();
+//      user.setFirstName("Agent");
+//      user.setLastName("Test");
+//      user.setEmail("agent.test@test.edu");
+//      createAgentUser(configId, user);
       
 //      List<FreshAgentUser> users = retrieveAgentUsers(configId, false);
+//      
 //      for (FreshAgentUser user : users) {
-//        System.out.println(user.toString());
+//        System.out.println(user.getId() + " | " + user.getLastName());
+//        
 //      }
-//      System.out.println(users.size());
       
-//    } catch (Exception e) {
-//      System.out.println("Error: " + GrouperClientUtils.getFullStackTrace(e));
-//    }
-//    System.exit(0);
+      
+//      FreshAgentUser user = retrieveAgentUserById(configId, 31003139443L, false);
+//      System.out.println(user.getEmail());
+//      user.setEmail("test.agent@test.edu");
+//      Set<String> fieldsToUpdate = new HashSet<String>();
+//      fieldsToUpdate.add("email");
+//      
+//      FreshAgentUser updatedUser = updateAgentUser(configId, user, fieldsToUpdate);
+//      System.out.println(updatedUser.getEmail());
+      
+      
+      
+      
+//      deleteAgentGroup(configId, 194670L);
+      
+    } catch (Exception e) {
+      System.out.println("Error: " + GrouperClientUtils.getFullStackTrace(e));
+    }
+    System.exit(0);
   }
 
   private static JsonNode executeMethod(Map<String, Object> debugMap, String debugLabel,
@@ -327,36 +346,315 @@ public class FreshAgentApiCommands {
   }
 
   /**
+   * The only Agent fields this provisioner writes to Freshservice.
+   *
+   * The Freshservice agent GET endpoint returns many additional fields
+   * (created_at, updated_at, last_login_at, has_logged_in, department_names,
+   * location_name, etc.) that its POST/PUT endpoints reject as read-only or
+   * invalid (HTTP 400). Rather than read-everything-and-blacklist (which breaks
+   * whenever Freshservice adds a new read-only field), every write body is built
+   * from this explicit whitelist.
+   *
+   * These are Java-style field names. The mapping to Freshservice JSON attribute
+   * names is:
+   *   firstName  -> first_name
+   *   lastName   -> last_name
+   *   email      -> email
+   *   roles      -> roles      (array, required by Freshservice on create)
+   * Custom fields are handled separately via the "customField_" attribute prefix
+   * and are nested under the JSON "custom_fields" object.
+   */
+  private static final Set<String> WRITABLE_AGENT_FIELDS = GrouperUtil.toSet(
+      "firstName", "lastName", "email", "roles");
+
+  /**
+   * Build a Freshservice agent write body (POST/PUT) containing only the fields
+   * this provisioner is allowed to write: first_name, last_name, email, roles,
+   * and custom_fields. Reads its values from the supplied FreshAgentUser.
+   *
+   * @param grouperAgentUser the agent whose writable values to serialize
+   * @param fieldsToWrite the Java field names to include. If null, all writable
+   *   fields (plus all custom fields present on the user) are written. Field
+   *   names not in {@link #WRITABLE_AGENT_FIELDS} and not prefixed with
+   *   {@link FreshAgentUser#CUSTOM_FIELD_ATTRIBUTE_PREFIX} are ignored.
+   * @return an ObjectNode containing only whitelisted writable fields
+   */
+  private static ObjectNode buildWritableAgentNode(FreshAgentUser grouperAgentUser, Set<String> fieldsToWrite) {
+
+    ObjectNode result = GrouperUtil.jsonJacksonNode();
+    if (grouperAgentUser == null) {
+      return result;
+    }
+
+    // firstName -> first_name
+    if (fieldsToWrite == null || fieldsToWrite.contains("firstName")) {
+      if (grouperAgentUser.getFirstName() != null) {
+        result.put("first_name", grouperAgentUser.getFirstName());
+      } else {
+        result.putNull("first_name");
+      }
+    }
+
+    // lastName -> last_name
+    if (fieldsToWrite == null || fieldsToWrite.contains("lastName")) {
+      if (grouperAgentUser.getLastName() != null) {
+        result.put("last_name", grouperAgentUser.getLastName());
+      } else {
+        result.putNull("last_name");
+      }
+    }
+
+    // email -> email (agents use "email", not "primary_email" like requesters)
+    if (fieldsToWrite == null || fieldsToWrite.contains("email")) {
+      if (grouperAgentUser.getEmail() != null) {
+        result.put("email", grouperAgentUser.getEmail());
+      } else {
+        result.putNull("email");
+      }
+    }
+
+    // roles -> roles (array). Required by Freshservice on create. We carry the
+    // raw roles JSON through unchanged so updates never strip an agent's roles.
+    if (fieldsToWrite == null || fieldsToWrite.contains("roles")) {
+      if (!StringUtils.isBlank(grouperAgentUser.getRolesJson())) {
+        try {
+          JsonNode rolesNode = GrouperUtil.objectMapper.readTree(grouperAgentUser.getRolesJson());
+          if (rolesNode != null && rolesNode.isArray()) {
+            result.set("roles", rolesNode);
+          }
+        } catch (Exception e) {
+          throw new RuntimeException("Unable to parse FreshAgentUser.rolesJson. json='"
+              + grouperAgentUser.getRolesJson() + "'", e);
+        }
+      }
+    }
+
+    // custom fields -> nested under custom_fields object.
+    // When fieldsToWrite is null, write every custom field present on the user.
+    // Otherwise, write only the customField_<name> entries named in fieldsToWrite.
+    Map<String, Object> customFields = grouperAgentUser.getCustomFields();
+    if (customFields != null && !customFields.isEmpty()) {
+      ObjectNode customFieldsNode = null;
+
+      if (fieldsToWrite == null) {
+        for (Map.Entry<String, Object> entry : customFields.entrySet()) {
+          String customFieldName = entry.getKey();
+          Object value = entry.getValue();
+          if (StringUtils.isBlank(customFieldName) || value == null) {
+            continue;
+          }
+          if (customFieldsNode == null) {
+            customFieldsNode = GrouperUtil.jsonJacksonNode();
+          }
+          putCustomFieldValue(customFieldsNode, customFieldName, value);
+        }
+      } else {
+        for (String attributeName : fieldsToWrite) {
+          if (StringUtils.isBlank(attributeName)
+              || !attributeName.startsWith(FreshAgentUser.CUSTOM_FIELD_ATTRIBUTE_PREFIX)) {
+            continue;
+          }
+          String customFieldName = attributeName.substring(FreshAgentUser.CUSTOM_FIELD_ATTRIBUTE_PREFIX.length());
+          if (StringUtils.isBlank(customFieldName)) {
+            continue;
+          }
+          Object value = customFields.get(customFieldName);
+          if (value == null) {
+            continue;
+          }
+          if (customFieldsNode == null) {
+            customFieldsNode = GrouperUtil.jsonJacksonNode();
+          }
+          putCustomFieldValue(customFieldsNode, customFieldName, value);
+        }
+      }
+
+      if (customFieldsNode != null && customFieldsNode.size() > 0) {
+        result.set("custom_fields", customFieldsNode);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Put a single custom field value into the custom_fields node, coercing it to
+   * one of the supported Freshservice types (String, Long, Boolean).
+   */
+  private static void putCustomFieldValue(ObjectNode customFieldsNode, String customFieldName, Object value) {
+    if (value instanceof String) {
+      customFieldsNode.put(customFieldName, (String) value);
+    } else if (value instanceof Boolean) {
+      customFieldsNode.put(customFieldName, ((Boolean) value).booleanValue());
+    } else if (value instanceof Number) {
+      customFieldsNode.put(customFieldName, ((Number) value).longValue());
+    } else {
+      throw new RuntimeException("Unsupported custom field type for " + customFieldName + ": "
+          + value.getClass().getName());
+    }
+  }
+
+  /**
+   * Create a Freshservice agent.
+   *
+   * Looks up an existing agent by email first:
+   * - If an agent already exists and is inactive, it is reactivated and then
+   *   updated with the writable fields from grouperAgentUser.
+   * - If an agent already exists and is active, it is updated with the writable
+   *   fields from grouperAgentUser.
+   * - If no agent exists with that email, a new agent is created via POST.
+   *
+   * Only the whitelisted Agent fields are ever sent to Freshservice:
+   *   first_name, last_name, email, roles, custom_fields.
+   * Freshservice requires a non-empty roles array on create, so the
+   * grouperAgentUser must carry roles (rolesJson) or the create will fail with
+   * an HTTP 400 validation error.
+   *
+   * @param configId the id of the external system
+   * @param grouperAgentUser the agent to be created (or updated if it exists)
+   * @return the created or updated agent
+   */
+  //Tested
+  public static FreshAgentUser createAgentUser(String configId, FreshAgentUser grouperAgentUser) {
+    Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
+
+    debugMap.put("method", "createAgentUser");
+
+    long startTime = System.nanoTime();
+
+    try {
+
+      // look up existing agent by email address
+      FreshAgentUser existingUser = null;
+      if (!StringUtils.isBlank(grouperAgentUser.getEmail())) {
+        existingUser = retrieveAgentUserByEmail(configId, grouperAgentUser.getEmail(), true);
+      }
+
+      if (existingUser != null) {
+
+        // if the existing agent is not active, reactivate it first
+        if (existingUser.getActive() == null || !existingUser.getActive()) {
+          reactivateAgentUser(configId, existingUser.getId());
+        }
+
+        // agent already exists - update the writable fields
+        Set<String> fieldsToUpdate = new java.util.LinkedHashSet<String>();
+        fieldsToUpdate.add("firstName");
+        fieldsToUpdate.add("lastName");
+        fieldsToUpdate.add("email");
+
+        // Only push roles to an existing agent when this entity actually carries
+        // roles. A configured default role is meant for brand new agents only;
+        // including "roles" unconditionally here would overwrite an existing
+        // agent's real roles with the default. (buildWritableAgentNode also skips
+        // a blank rolesJson, but leaving "roles" out of the field set makes the
+        // intent explicit and avoids a needless no-op.)
+        if (grouperAgentUser.hasRoles()) {
+          fieldsToUpdate.add("roles");
+        }
+
+        // include any custom fields carried on the grouperAgentUser
+        if (grouperAgentUser.getCustomFields() != null) {
+          for (String customFieldName : grouperAgentUser.getCustomFields().keySet()) {
+            if (!StringUtils.isBlank(customFieldName)) {
+              fieldsToUpdate.add(FreshAgentUser.CUSTOM_FIELD_ATTRIBUTE_PREFIX + customFieldName);
+            }
+          }
+        }
+
+        // set the id from the existing agent so updateAgentUser can find it
+        grouperAgentUser.setId(existingUser.getId());
+
+        return updateAgentUser(configId, grouperAgentUser, fieldsToUpdate);
+      }
+
+      // no existing agent found - create a new one via POST
+      return createAgentUserHelper(configId, grouperAgentUser);
+
+    } catch (RuntimeException re) {
+      debugMap.put("exception", GrouperClientUtils.getFullStackTrace(re));
+      throw re;
+    } finally {
+      FreshAgentLog.freshserviceLog(debugMap, startTime);
+    }
+  }
+
+  /**
+   * Helper that creates a new agent in Freshservice via POST /api/v2/agents.
+   * The request body contains only the whitelisted writable Agent fields
+   * (first_name, last_name, email, roles, custom_fields).
+   *
+   * Callers should typically use {@link #createAgentUser(String, FreshAgentUser)}
+   * which handles the lookup-by-email and update-if-exists logic.
+   *
+   * @param configId the id of the external system
+   * @param grouperAgentUser the agent to be created
+   * @return the created agent with its assigned id
+   */
+  public static FreshAgentUser createAgentUserHelper(String configId, FreshAgentUser grouperAgentUser) {
+    Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
+
+    debugMap.put("method", "createAgentUserHelper");
+
+    long startTime = System.nanoTime();
+
+    try {
+      // build the POST body from the writable whitelist only
+      ObjectNode jsonToSend = buildWritableAgentNode(grouperAgentUser, null);
+
+      String jsonStringToSend = GrouperUtil.jsonJacksonToString(jsonToSend);
+
+      int[] returnCode = new int[] { -1 };
+      JsonNode jsonNode = executeMethod(debugMap, "createAgentUserHelper", "POST", configId, "api/v2/agents",
+          GrouperUtil.toSet(200, 201, 409), returnCode, jsonStringToSend, null, false, null);
+
+      if (returnCode[0] == 409) {
+        throw new RuntimeException("Agent already exists: " + grouperAgentUser.getEmail());
+      }
+
+      JsonNode userNode = GrouperUtil.jsonJacksonGetNode(jsonNode, "agent");
+      FreshAgentUser createdUser = FreshAgentUser.fromJson(userNode);
+      return createdUser;
+
+    } catch (RuntimeException re) {
+      debugMap.put("exception", GrouperClientUtils.getFullStackTrace(re));
+      throw re;
+    } finally {
+      FreshAgentLog.freshserviceLog(debugMap, startTime);
+    }
+  }
+
+  /**
    * Update a Freshservice agent.
    *
-   * This method performs a three-step update:
-   * 1. GET the current agent JSON from Freshservice by id
-   * 2. Strip read-only attributes that cannot be sent on a PUT
-   *    (id, created_at, updated_at, last_login_at, last_active_at, has_logged_in,
-   *    auto_assign_status_changed_at, department_names, location_name)
-   * 3. Overlay the fields indicated in fieldsToUpdate with values from the
-   *    supplied FreshAgentUser, then PUT the result
+   * The PUT body is built entirely from the writable-field whitelist
+   * ({@link #WRITABLE_AGENT_FIELDS} plus custom fields), so read-only fields
+   * returned by the Freshservice GET endpoint are never echoed back on the PUT.
+   * This avoids HTTP 400 (readonly_field / invalid_field) errors.
    *
-   * The fieldsToUpdate set uses Java-style field names which are translated
-   * to their Freshservice JSON attribute names (e.g. "firstName" becomes "first_name",
-   * "email" stays "email", "departmentId" becomes "department_ids" array).
+   * Only the following Agent fields are written:
+   *   first_name, last_name, email, roles, custom_fields.
    *
-   * Note: unlike requesters, agents use the "email" attribute (not "primary_email"),
-   * and group membership is handled via the agent group's members array
-   * (see addGroupMembership / removeGroupMembership), not on the agent record.
+   * The fieldsToUpdate set uses Java-style field names. Custom fields use the
+   * prefix "customField_" followed by the Freshservice custom field name
+   * (e.g. "customField_pennkey" sets custom_fields.pennkey).
    *
-   * Custom fields use the prefix "customField_" followed by the Freshservice
-   * custom field name (e.g. "customField_pennkey").
+   * Note: unlike requesters, agents use the "email" attribute (not
+   * "primary_email"), and group membership is handled via the agent group's
+   * members array (see addGroupMembership / removeGroupMembership), not on the
+   * agent record.
    *
    * @param configId the id of the external system
    * @param grouperAgentUser the agent containing the new values.
    *   Must have id set to identify which agent to update.
    * @param fieldsToUpdate set of Java field names to update. Supported values:
-   *   "firstName", "lastName", "email", "jobTitle", "workPhoneNumber",
-   *   "departmentId", "reportingManagerId", "address", "active",
-   *   and custom fields with prefix "customField_" (e.g. "customField_pennkey")
+   *   "firstName", "lastName", "email", "roles", and custom fields with prefix
+   *   "customField_" (e.g. "customField_pennkey"). Any other field name (e.g.
+   *   a read-only attribute, or an unmanaged field) results in an exception so
+   *   the misconfiguration is caught rather than silently producing an HTTP 400.
    * @return the updated agent parsed from the PUT response
    */
+  //Tested
   public static FreshAgentUser updateAgentUser(String configId, FreshAgentUser grouperAgentUser, Set<String> fieldsToUpdate) {
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
 
@@ -376,183 +674,46 @@ public class FreshAgentApiCommands {
         throw new RuntimeException("userId is null or 0 (unset)");
       }
 
-      // Step 1: GET the current state of the agent from Freshservice
+      // Confirm the agent exists in the target before attempting an update.
+      // We do NOT carry any fields forward from the GET; the PUT body is built
+      // entirely from the writable whitelist below.
       // GET /api/v2/agents/{id} returns { "agent": { ... } }
       int[] getReturnCode = new int[] { -1 };
       String getUrlSuffix = "api/v2/agents/" + String.valueOf(userId);
       JsonNode getJsonNode = executeMethod(debugMap, "updateAgentUser", "GET", configId, getUrlSuffix,
           GrouperUtil.toSet(200, 404), getReturnCode, null, null, false, null);
 
-      // if the agent does not exist, we cannot update
-      if (getReturnCode[0] == 404 || getJsonNode == null) {
+      if (getReturnCode[0] == 404 || getJsonNode == null || getJsonNode.get("agent") == null) {
         throw new RuntimeException("Cannot update agent that does not exist in target. id=" + userId);
       }
 
-      // extract the "agent" object from the response
-      JsonNode agentNode = getJsonNode.get("agent");
-      if (agentNode == null) {
-        throw new RuntimeException("Cannot update agent that does not exist in target. id=" + userId);
-      }
-
-      // Step 2: deep copy to a mutable ObjectNode and strip read-only attributes
-      // that the Freshservice PUT endpoint does not accept
-      ObjectNode jsonToSend = agentNode.deepCopy();
-      jsonToSend.remove("id");
-      jsonToSend.remove("created_at");
-      jsonToSend.remove("updated_at");
-      jsonToSend.remove("last_login_at");
-      jsonToSend.remove("last_active_at");
-      jsonToSend.remove("has_logged_in");
-      jsonToSend.remove("auto_assign_status_changed_at");
-      jsonToSend.remove("department_names");
-      jsonToSend.remove("location_name");
-
-      // Step 3: overlay only the fields indicated in fieldsToUpdate.
-      // Each field name is a Java-style name that maps to a Freshservice JSON attribute.
-      // If the value on the FreshAgentUser is non-null, set it; otherwise send null.
+      // Validate the requested fields against the writable whitelist. Anything
+      // that is neither a whitelisted field nor a custom field attribute is a
+      // configuration error (e.g. CRUD update left enabled on a read-only or
+      // unmanaged attribute).
       if (fieldsToUpdate != null) {
         for (String fieldName : fieldsToUpdate) {
           if (StringUtils.isBlank(fieldName)) {
             continue;
           }
-
-          // read-only attributes that Freshservice does not allow on PUT.
-          // If a provisioner tries to update these, the CRUD update setting
-          // for this attribute should be set to false in the provisioner configuration.
-          if ("id".equals(fieldName)
-              || "createdAt".equals(fieldName) || "hasLoggedIn".equals(fieldName)
-              || "updatedAt".equals(fieldName) || "lastLoginAt".equals(fieldName)
-              || "lastActiveAt".equals(fieldName)
-              || "departmentNames".equals(fieldName) || "locationName".equals(fieldName)) {
-            throw new RuntimeException("Cannot update read-only attribute '" + fieldName
-                + "'. Set CRUD update to false for this attribute in the provisioner configuration.");
-          }
-
-          // "firstName" -> JSON "first_name"
-          if ("firstName".equals(fieldName)) {
-            if (grouperAgentUser.getFirstName() != null) {
-              jsonToSend.put("first_name", grouperAgentUser.getFirstName());
-            } else {
-              jsonToSend.putNull("first_name");
-            }
-
-          // "lastName" -> JSON "last_name"
-          } else if ("lastName".equals(fieldName)) {
-            if (grouperAgentUser.getLastName() != null) {
-              jsonToSend.put("last_name", grouperAgentUser.getLastName());
-            } else {
-              jsonToSend.putNull("last_name");
-            }
-
-          // "email" -> JSON "email" (agents use "email", not "primary_email")
-          } else if ("email".equals(fieldName)) {
-            if (grouperAgentUser.getEmail() != null) {
-              jsonToSend.put("email", grouperAgentUser.getEmail());
-            } else {
-              jsonToSend.putNull("email");
-            }
-
-          // "jobTitle" -> JSON "job_title"
-          } else if ("jobTitle".equals(fieldName)) {
-            if (grouperAgentUser.getJobTitle() != null) {
-              jsonToSend.put("job_title", grouperAgentUser.getJobTitle());
-            } else {
-              jsonToSend.putNull("job_title");
-            }
-
-          // "workPhoneNumber" -> JSON "work_phone_number"
-          } else if ("workPhoneNumber".equals(fieldName)) {
-            if (grouperAgentUser.getWorkPhoneNumber() != null) {
-              jsonToSend.put("work_phone_number", grouperAgentUser.getWorkPhoneNumber());
-            } else {
-              jsonToSend.putNull("work_phone_number");
-            }
-
-          // "departmentId" -> JSON "department_ids" (array with single element)
-          } else if ("departmentId".equals(fieldName)) {
-            if (grouperAgentUser.getDepartmentId() != null) {
-              // Freshservice expects department_ids as an array
-              ArrayNode departmentIdsArray = GrouperUtil.jsonJacksonArrayNode();
-              departmentIdsArray.add(grouperAgentUser.getDepartmentId().longValue());
-              jsonToSend.set("department_ids", departmentIdsArray);
-            } else {
-              jsonToSend.putNull("department_ids");
-            }
-
-          // "reportingManagerId" -> JSON "reporting_manager_id"
-          } else if ("reportingManagerId".equals(fieldName)) {
-            if (grouperAgentUser.getReportingManagerId() != null) {
-              jsonToSend.put("reporting_manager_id", grouperAgentUser.getReportingManagerId().longValue());
-            } else {
-              jsonToSend.putNull("reporting_manager_id");
-            }
-
-          // "address" -> JSON "address"
-          } else if ("address".equals(fieldName)) {
-            if (grouperAgentUser.getAddress() != null) {
-              jsonToSend.put("address", grouperAgentUser.getAddress());
-            } else {
-              jsonToSend.putNull("address");
-            }
-
-          // "externalId" -> JSON "external_id"
-          } else if ("externalId".equals(fieldName)) {
-            if (grouperAgentUser.getExternalId() != null) {
-              jsonToSend.put("external_id", grouperAgentUser.getExternalId());
-            } else {
-              jsonToSend.putNull("external_id");
-            }
-
-          // "active" -> JSON "active" (boolean)
-          } else if ("active".equals(fieldName)) {
-            if (grouperAgentUser.getActive() != null) {
-              jsonToSend.put("active", grouperAgentUser.getActive().booleanValue());
-            } else {
-              jsonToSend.putNull("active");
-            }
-
-          // "customField_<name>" -> nested inside JSON "custom_fields" object
-          // e.g. "customField_pennkey" sets custom_fields.pennkey
-          } else if (fieldName.startsWith(FreshAgentUser.CUSTOM_FIELD_ATTRIBUTE_PREFIX)) {
-
-            // strip the prefix to get the actual Freshservice custom field name
-            String customFieldName = fieldName.substring(FreshAgentUser.CUSTOM_FIELD_ATTRIBUTE_PREFIX.length());
-            if (!StringUtils.isBlank(customFieldName)) {
-
-              // get or create the custom_fields JSON object
-              ObjectNode customFieldsNode = (ObjectNode) GrouperUtil.jsonJacksonGetNode(jsonToSend, "custom_fields");
-              if (customFieldsNode == null) {
-                customFieldsNode = GrouperUtil.jsonJacksonNode();
-                jsonToSend.set("custom_fields", customFieldsNode);
-              }
-
-              // get the custom field value from the FreshAgentUser
-              Object customValue = grouperAgentUser.getCustomFields() == null ? null
-                  : grouperAgentUser.getCustomFields().get(customFieldName);
-
-              // set the value in the JSON according to its type
-              if (customValue == null) {
-                customFieldsNode.putNull(customFieldName);
-              } else if (customValue instanceof String) {
-                customFieldsNode.put(customFieldName, (String) customValue);
-              } else if (customValue instanceof Boolean) {
-                customFieldsNode.put(customFieldName, ((Boolean) customValue).booleanValue());
-              } else if (customValue instanceof Number) {
-                customFieldsNode.put(customFieldName, ((Number) customValue).longValue());
-              } else {
-                throw new RuntimeException("Unsupported custom field type for " + customFieldName + ": "
-                    + customValue.getClass().getName());
-              }
-            }
-
-          // unrecognized field name
-          } else {
-            throw new RuntimeException("Unrecognized field name in fieldsToUpdate: '" + fieldName + "'");
+          boolean isCustomField = fieldName.startsWith(FreshAgentUser.CUSTOM_FIELD_ATTRIBUTE_PREFIX);
+          if (!WRITABLE_AGENT_FIELDS.contains(fieldName) && !isCustomField) {
+            throw new RuntimeException("Field '" + fieldName + "' is not writable for agents. "
+                + "Writable fields: " + GrouperUtil.setToString(WRITABLE_AGENT_FIELDS)
+                + " (plus custom fields prefixed '" + FreshAgentUser.CUSTOM_FIELD_ATTRIBUTE_PREFIX + "'). "
+                + "Set CRUD update to false for this attribute in the provisioner configuration.");
           }
         }
       }
 
-      // serialize the JSON and send the PUT request
+      // Build the PUT body from only the requested writable fields.
+      ObjectNode jsonToSend = buildWritableAgentNode(grouperAgentUser, fieldsToUpdate);
+
+      // nothing to update
+      if (jsonToSend.size() == 0) {
+        return grouperAgentUser;
+      }
+
       String jsonStringToSend = GrouperUtil.jsonJacksonToString(jsonToSend);
 
       // PUT /api/v2/agents/{id} returns { "agent": { ... } }
