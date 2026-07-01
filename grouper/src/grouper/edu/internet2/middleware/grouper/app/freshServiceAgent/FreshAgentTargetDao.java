@@ -287,7 +287,8 @@ public class FreshAgentTargetDao extends GrouperProvisionerTargetDaoBase {
       }
 
       FreshAgentUser createdUser = FreshAgentApiCommands.createAgentUser(
-          freshserviceConfiguration.getFreshserviceExternalSystemConfigId(), grouperAgentUser);
+          freshserviceConfiguration.getFreshserviceExternalSystemConfigId(), grouperAgentUser,
+          freshserviceConfiguration.isReactivateAsFullTime());
 
       targetEntity.setId(String.valueOf(createdUser.getId()));
       targetEntity.setProvisioned(true);

@@ -1,7 +1,6 @@
 package edu.internet2.middleware.grouper.app.freshServiceAgent;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,17 +31,43 @@ public class FreshAgentApiCommands {
 
   public static void main(String[] args) {
 
-    GrouperStartup.startup();
+//    GrouperStartup.startup();
 
-    try {
-      String configId = "freshserviceRequester";
+//    try {
+//      String configId = "freshserviceRequester";
+
+//      FreshAgentGroup group = new FreshAgentGroup();
+//      group.setName("Agent Test 2");
+//      group.setDescription("Testing for Freshservice Agent Provisioner");
+//      FreshAgentGroup returnGroup = createAgentGroup(configId, group);
+//      System.out.println(returnGroup.getId());
+
+//      List<FreshAgentGroup> groups = retrieveAgentGroups(configId);
+//      for (FreshAgentGroup group : GrouperUtil.nonNull(groups)) {
+//        System.out.println(group.getName());
+//      }
+
+//      FreshAgentGroup group = new FreshAgentGroup();
+//      group.setId(194669L);
+//      group.setName("Agent Test 1");
+//      group.setDescription("Testing for Grouper Freshservice Agent Provisioner");
+//      Map<String, ProvisioningObjectChangeAction> fieldsToUpdate = new LinkedHashMap<String, ProvisioningObjectChangeAction>();
+//
+//      fieldsToUpdate.put("description", ProvisioningObjectChangeAction.valueOf("update"));
+//      updateAgentGroup(configId, group, fieldsToUpdate);
+
+//      deleteAgentGroup(configId, 194670L);
       
-      reactivateAgentUser(configId, 31003139443L);
+//      List<FreshAgentUser> users = retrieveAgentUsers(configId, false);
+//      for (FreshAgentUser user : users) {
+//        System.out.println(user.toString());
+//      }
+//      System.out.println(users.size());
       
-    } catch (Exception e) {
-      System.out.println("Error: " + GrouperClientUtils.getFullStackTrace(e));
-    }
-    System.exit(0);
+//    } catch (Exception e) {
+//      System.out.println("Error: " + GrouperClientUtils.getFullStackTrace(e));
+//    }
+//    System.exit(0);
   }
 
   private static JsonNode executeMethod(Map<String, Object> debugMap, String debugLabel,
@@ -470,8 +495,22 @@ public class FreshAgentApiCommands {
    * @param grouperAgentUser the agent to be created (or updated if it exists)
    * @return the created or updated agent
    */
-  //Tested
   public static FreshAgentUser createAgentUser(String configId, FreshAgentUser grouperAgentUser) {
+    return createAgentUser(configId, grouperAgentUser, true);
+  }
+
+  /**
+   * Create a Freshservice agent (see {@link #createAgentUser(String, FreshAgentUser)}),
+   * with control over how an existing inactive agent is reactivated.
+   *
+   * @param configId the id of the external system
+   * @param grouperAgentUser the agent to be created (or updated if it exists)
+   * @param reactivateAsFullTime when an existing agent is inactive and must be
+   *   reactivated first, whether to restore them as full-time (true) or leave
+   *   them occasional (false)
+   * @return the created or updated agent
+   */
+  public static FreshAgentUser createAgentUser(String configId, FreshAgentUser grouperAgentUser, boolean reactivateAsFullTime) {
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
 
     debugMap.put("method", "createAgentUser");
@@ -490,7 +529,7 @@ public class FreshAgentApiCommands {
 
         // if the existing agent is not active, reactivate it first
         if (existingUser.getActive() == null || !existingUser.getActive()) {
-          reactivateAgentUser(configId, existingUser.getId());
+          reactivateAgentUser(configId, existingUser.getId(), reactivateAsFullTime);
         }
 
         // agent already exists - update the writable fields
@@ -610,7 +649,6 @@ public class FreshAgentApiCommands {
    *   the misconfiguration is caught rather than silently producing an HTTP 400.
    * @return the updated agent parsed from the PUT response
    */
-  //Tested
   public static FreshAgentUser updateAgentUser(String configId, FreshAgentUser grouperAgentUser, Set<String> fieldsToUpdate) {
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
 
@@ -726,7 +764,6 @@ public class FreshAgentApiCommands {
    * @param id the agent group id
    * @return the GrouperAgentGroup matching the Freshservice group retrieved
    */
-  //Tested
   public static FreshAgentGroup retrieveAgentGroup(String configId, Long id) {
 
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
@@ -799,7 +836,6 @@ public class FreshAgentApiCommands {
    * @param configId the id of the external system
    * @return
    */
-  //Tested
   public static List<FreshAgentGroup> retrieveAgentGroups(String configId) {
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
     debugMap.put("method", "retrieveAgentGroups");
@@ -851,7 +887,6 @@ public class FreshAgentApiCommands {
    *   in the results. If false, only active agents are returned.
    * @return a list of Freshservice agents
    */
-  //Tested
   public static List<FreshAgentUser> retrieveAgentUsers(String configId, boolean includeInactiveAgents) {
 
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
@@ -910,7 +945,6 @@ public class FreshAgentApiCommands {
    *   If false, return null for inactive agents.
    * @return the agent, or null if not found (or inactive when not included)
    */
-  //Tested
   public static FreshAgentUser retrieveAgentUserById(String configId, Long id, boolean includeInactiveAgents) {
 
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
@@ -965,7 +999,6 @@ public class FreshAgentApiCommands {
    *   If false, return null for inactive agents.
    * @return the agent, or null if not found (or inactive when not included)
    */
-  //Tested
   public static FreshAgentUser retrieveAgentUserByEmail(String configId, String email, boolean includeInactiveAgents) {
 
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
@@ -1030,7 +1063,6 @@ public class FreshAgentApiCommands {
    * @return the agent if found, null if not found
    * @throws RuntimeException if multiple agents are found or attributeValue is an unsupported type
    */
-  //Tested
   public static FreshAgentUser retrieveAgentUserByAttribute(String configId, String attributeName, Object attributeValue) {
 
     if (StringUtils.isBlank(attributeName)) {
@@ -1135,7 +1167,6 @@ public class FreshAgentApiCommands {
    * @param groupId the id of the group gaining a member agent
    * @param userId the id of the new group member agent
    */
-  //Tested
   public static void addGroupMembership(String configId, Long groupId, Long userId) {
     updateGroupMembershipInternal(configId, groupId, userId, true);
   }
@@ -1150,7 +1181,6 @@ public class FreshAgentApiCommands {
    * @param groupId the id of the group losing a member agent
    * @param userId the id of the group member agent to remove
    */
-  //Tested
   public static void removeGroupMembership(String configId, Long groupId, Long userId) {
     updateGroupMembershipInternal(configId, groupId, userId, false);
   }
@@ -1254,7 +1284,6 @@ public class FreshAgentApiCommands {
    * @param groupId the id of the group to get members from
    * @return list of agents who are members of the group
    */
-  //Tested
   public static List<FreshAgentUser> retrieveMembershipsByGroup(String configId, Long groupId) {
 
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
@@ -1320,7 +1349,7 @@ public class FreshAgentApiCommands {
       String id = String.valueOf(userId);
 
       executeMethod(debugMap, "deactivateAgentUser", "DELETE", configId, "api/v2/agents/" + id,
-          GrouperUtil.toSet(200, 204, 404), new int[] { -1 }, null, null, false, null);
+          GrouperUtil.toSet(204, 404), new int[] { -1 }, null, null, false, null);
 
     } catch (RuntimeException re) {
       debugMap.put("exception", GrouperClientUtils.getFullStackTrace(re));
@@ -1331,21 +1360,46 @@ public class FreshAgentApiCommands {
   }
 
   /**
-   * Reactivate a deactivated agent in Freshservice.
-   * Endpoint: PUT /api/v2/agents/{id}/reactivate
-   * Returns 200 if successful.  400 with body if already active.
+   * Reactivate a deactivated agent in Freshservice, restoring them as full-time.
    *
-   * Note: the reactivate endpoint restores the agent as OCCASIONAL regardless of
-   * their prior license type. To restore them as full-time, we follow up with a
-   * PUT /api/v2/agents/{id} setting occasional=false.
+   * Convenience overload equivalent to
+   * {@link #reactivateAgentUser(String, Long, boolean)} with
+   * reactivateAsFullTime = true. The Freshservice /reactivate endpoint always
+   * restores an agent as occasional regardless of their prior license type, so
+   * this follows the reactivate with a PUT setting occasional=false.
    *
    * @param configId the id of the external system
    * @param userId the agent id
    */
   public static void reactivateAgentUser(String configId, Long userId) {
+    reactivateAgentUser(configId, userId, true);
+  }
+
+  /**
+   * Reactivate a deactivated agent in Freshservice.
+   * Endpoint: PUT /api/v2/agents/{id}/reactivate
+   * Returns 200 if successful.  400 with body if already active.
+   *
+   * Note: the reactivate endpoint restores the agent as OCCASIONAL regardless of
+   * their prior license type. When reactivateAsFullTime is true, this follows the
+   * reactivate with a PUT /api/v2/agents/{id} setting occasional=false to restore
+   * full-time. Setting a full-time agent consumes a licensed seat, so callers
+   * that want the agent to remain occasional (day-pass) should pass false.
+   *
+   * The follow-up PUT only runs when the reactivate call actually reactivated the
+   * agent (HTTP 200). A 400 means the agent was already active, in which case the
+   * license type is left untouched.
+   *
+   * @param configId the id of the external system
+   * @param userId the agent id
+   * @param reactivateAsFullTime true to restore the agent as full-time after
+   *   reactivation, false to leave them occasional
+   */
+  public static void reactivateAgentUser(String configId, Long userId, boolean reactivateAsFullTime) {
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
 
     debugMap.put("method", "reactivateAgentUser");
+    debugMap.put("reactivateAsFullTime", reactivateAsFullTime);
 
     long startTime = System.nanoTime();
 
@@ -1359,10 +1413,11 @@ public class FreshAgentApiCommands {
       executeMethod(debugMap, "reactivateAgentUser", "PUT", configId, "api/v2/agents/" + id + "/reactivate",
           GrouperUtil.toSet(200, 400), returnCode, null, null, false, null);
 
-      // The reactivate endpoint always restores the agent as occasional. Only
-      // follow up to restore full-time when the reactivate actually succeeded
-      // (200); a 400 means the agent was already active, so leave it alone.
-      if (returnCode[0] == 200) {
+      // The reactivate endpoint always restores the agent as occasional. When
+      // configured to restore full-time, follow up with a PUT setting
+      // occasional=false. Only do this on a genuine reactivation (200); a 400
+      // means the agent was already active, so leave the license type alone.
+      if (reactivateAsFullTime && returnCode[0] == 200) {
         ObjectNode fullTimeBody = GrouperUtil.jsonJacksonNode();
         fullTimeBody.put("occasional", false);
         String fullTimeJson = GrouperUtil.jsonJacksonToString(fullTimeBody);

@@ -33,6 +33,19 @@ public class FreshAgentConfiguration extends GrouperProvisioningConfiguration {
   /** Default assignment_scope used when {@link #defaultAgentRoleId} is set but no scope is configured. */
   public static final String DEFAULT_ROLE_ASSIGNMENT_SCOPE = "entire_helpdesk";
 
+  /**
+   * Whether a reactivated agent should be restored as full-time. The Freshservice
+   * /reactivate endpoint always restores an agent as occasional regardless of
+   * their prior license type; when this is true, the provisioner follows the
+   * reactivate with a PUT setting occasional=false to restore full-time.
+   * Setting a full-time agent consumes a licensed seat, so sites that want
+   * reactivated agents to remain occasional (day-pass) can set this to false.
+   * Defaults to true.
+   *
+   * Config key: provisioner.&lt;configId&gt;.reactivateAsFullTime
+   */
+  private boolean reactivateAsFullTime = true;
+
   @Override
   public void configureSpecificSettings() {
     this.freshserviceExternalSystemConfigId = this.retrieveConfigString("freshserviceExternalSystemConfigId", true);
@@ -52,6 +65,24 @@ public class FreshAgentConfiguration extends GrouperProvisioningConfiguration {
     String defaultAgentRoleAssignmentScopeString = this.retrieveConfigString("defaultAgentRoleAssignmentScope", false);
     this.defaultAgentRoleAssignmentScope = StringUtils.isBlank(defaultAgentRoleAssignmentScopeString)
         ? DEFAULT_ROLE_ASSIGNMENT_SCOPE : defaultAgentRoleAssignmentScopeString.trim();
+
+    // optional: restore reactivated agents as full-time (defaults to true).
+    // Only an explicit "false" turns this off; unset keeps the default. A value
+    // that is neither "true" nor "false" is a configuration error rather than a
+    // silent fallback, since silently choosing occasional/full-time affects seat
+    // licensing.
+    String reactivateAsFullTimeString = this.retrieveConfigString("reactivateAsFullTime", false);
+    if (StringUtils.isNotBlank(reactivateAsFullTimeString)) {
+      String trimmed = reactivateAsFullTimeString.trim();
+      if ("true".equalsIgnoreCase(trimmed)) {
+        this.reactivateAsFullTime = true;
+      } else if ("false".equalsIgnoreCase(trimmed)) {
+        this.reactivateAsFullTime = false;
+      } else {
+        throw new RuntimeException("Configuration 'reactivateAsFullTime' must be 'true' or 'false', but was: '"
+            + reactivateAsFullTimeString + "'");
+      }
+    }
   }
   
   /**
@@ -100,6 +131,22 @@ public class FreshAgentConfiguration extends GrouperProvisioningConfiguration {
    */
   public void setDefaultAgentRoleAssignmentScope(String defaultAgentRoleAssignmentScope) {
     this.defaultAgentRoleAssignmentScope = defaultAgentRoleAssignmentScope;
+  }
+
+  /**
+   * Whether reactivated agents should be restored as full-time (default true).
+   * @return true to restore reactivated agents as full-time, false to leave them occasional
+   */
+  public boolean isReactivateAsFullTime() {
+    return reactivateAsFullTime;
+  }
+
+  /**
+   * Set whether reactivated agents should be restored as full-time.
+   * @param reactivateAsFullTime true to restore full-time, false to leave occasional
+   */
+  public void setReactivateAsFullTime(boolean reactivateAsFullTime) {
+    this.reactivateAsFullTime = reactivateAsFullTime;
   }
 
 }
