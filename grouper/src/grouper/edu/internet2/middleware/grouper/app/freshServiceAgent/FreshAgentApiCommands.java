@@ -31,43 +31,17 @@ public class FreshAgentApiCommands {
 
   public static void main(String[] args) {
 
-//    GrouperStartup.startup();
+    GrouperStartup.startup();
 
-//    try {
-//      String configId = "freshserviceRequester";
-
-//      FreshAgentGroup group = new FreshAgentGroup();
-//      group.setName("Agent Test 2");
-//      group.setDescription("Testing for Freshservice Agent Provisioner");
-//      FreshAgentGroup returnGroup = createAgentGroup(configId, group);
-//      System.out.println(returnGroup.getId());
-
-//      List<FreshAgentGroup> groups = retrieveAgentGroups(configId);
-//      for (FreshAgentGroup group : GrouperUtil.nonNull(groups)) {
-//        System.out.println(group.getName());
-//      }
-
-//      FreshAgentGroup group = new FreshAgentGroup();
-//      group.setId(194669L);
-//      group.setName("Agent Test 1");
-//      group.setDescription("Testing for Grouper Freshservice Agent Provisioner");
-//      Map<String, ProvisioningObjectChangeAction> fieldsToUpdate = new LinkedHashMap<String, ProvisioningObjectChangeAction>();
-//
-//      fieldsToUpdate.put("description", ProvisioningObjectChangeAction.valueOf("update"));
-//      updateAgentGroup(configId, group, fieldsToUpdate);
-
-//      deleteAgentGroup(configId, 194670L);
+    try {
+      String configId = "freshserviceRequester";
       
-//      List<FreshAgentUser> users = retrieveAgentUsers(configId, false);
-//      for (FreshAgentUser user : users) {
-//        System.out.println(user.toString());
-//      }
-//      System.out.println(users.size());
+      // Test methods here
       
-//    } catch (Exception e) {
-//      System.out.println("Error: " + GrouperClientUtils.getFullStackTrace(e));
-//    }
-//    System.exit(0);
+    } catch (Exception e) {
+      System.out.println("Error: " + GrouperClientUtils.getFullStackTrace(e));
+    }
+    System.exit(0);
   }
 
   private static JsonNode executeMethod(Map<String, Object> debugMap, String debugLabel,
@@ -193,8 +167,7 @@ public class FreshAgentApiCommands {
    * @param configId the id of the external system
    * @param grouperAgentGroup the agent group to be created in Freshservice
    */
-  //Tested
-  public static FreshAgentGroup createAgentGroup(String configId, FreshAgentGroup grouperAgentGroup) {
+   public static FreshAgentGroup createAgentGroup(String configId, FreshAgentGroup grouperAgentGroup) {
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
 
     debugMap.put("method", "createAgentGroup");
@@ -241,7 +214,6 @@ public class FreshAgentApiCommands {
    * @param fieldsToUpdate the fields to update; supported keys: "name", "description".
    *   A {@link ProvisioningObjectChangeAction#delete} action nulls the field out.
    */
-  //Tested
   public static FreshAgentGroup updateAgentGroup(String configId, FreshAgentGroup grouperAgentGroup, Map<String, ProvisioningObjectChangeAction> fieldsToUpdate) {
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
 
@@ -1349,7 +1321,7 @@ public class FreshAgentApiCommands {
       String id = String.valueOf(userId);
 
       executeMethod(debugMap, "deactivateAgentUser", "DELETE", configId, "api/v2/agents/" + id,
-          GrouperUtil.toSet(204, 404), new int[] { -1 }, null, null, false, null);
+          GrouperUtil.toSet(200, 204, 404), new int[] { -1 }, null, null, false, null);
 
     } catch (RuntimeException re) {
       debugMap.put("exception", GrouperClientUtils.getFullStackTrace(re));
