@@ -1,6 +1,7 @@
 package edu.internet2.middleware.grouper.app.freshServiceAgent;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +38,39 @@ public class FreshAgentApiCommands {
       String configId = "freshserviceRequester";
       
       // Test methods here
+      
+//      FreshAgentGroup group = new FreshAgentGroup();
+//      group.setName("Agent Test 2");
+//      group.setDescription("Testing for Grouper Freshservice Agent Provisioner");
+//      createAgentGroup(configId, group);
+      
+//      FreshAgentGroup group = retrieveAgentGroup(configId, 194758L);
+//      System.out.println(group.getName());
+//      group.setDescription("Testing for Grouper Agent Provisioner");
+//      Map<String, ProvisioningObjectChangeAction> fieldsToUpdate = new LinkedHashMap<String, ProvisioningObjectChangeAction>();
+//      fieldsToUpdate.put("description", ProvisioningObjectChangeAction.valueOf("update"));
+//      updateAgentGroup(configId, group, fieldsToUpdate);
+      
+//      FreshAgentUser user = new FreshAgentUser();
+//      user.setFirstName("Agent");
+//      user.setLastName("Test");
+//      user.setEmail("agent.test@test.edu");
+//      createAgentUser(configId, user);
+      
+//      List<FreshAgentUser> users = retrieveAgentUsers(configId, false);
+//      for (FreshAgentUser user : users) {
+//        if (user.getFirstName().equals("Agent")) {
+//          System.out.println(user.getId());
+//        }
+//      }
+      
+//      FreshAgentUser user = retrieveAgentUserById(configId, 31003141049L, true);
+//      user.setEmail("test.agent@test.edu");
+//      Set<String> fieldsToUpdate = new HashSet<String>();
+//      fieldsToUpdate.add("email");
+//      updateAgentUser(configId, user, fieldsToUpdate);
+      
+//      deleteAgentGroup(configId, 194734L);    
       
     } catch (Exception e) {
       System.out.println("Error: " + GrouperClientUtils.getFullStackTrace(e));

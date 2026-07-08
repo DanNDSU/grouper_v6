@@ -83,6 +83,9 @@ public class FreshAgentConfiguration extends GrouperProvisioningConfiguration {
             + reactivateAsFullTimeString + "'");
       }
     }
+    
+    System.out.println("FRESH_AGENT defaultAgentRoleId=" + this.defaultAgentRoleId
+        + " scope=" + this.defaultAgentRoleAssignmentScope);
   }
   
   /**

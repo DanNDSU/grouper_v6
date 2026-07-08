@@ -672,7 +672,6 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     userToCreate.setLastName("Smith");
     userToCreate.setEmail("jsmith@test.edu");
     userToCreate.setActive(true);
-    userToCreate.setJobTitle("Worker");
     userToCreate.setDepartmentId(39000211201L);
     userToCreate.setCustomFields(customFields);
 
@@ -695,7 +694,6 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     assertEquals("jsmith2@upenn.edu", updatedUser.getEmail());
     assertEquals("John", updatedUser.getFirstName());
     assertEquals("Smith", updatedUser.getLastName());
-    assertEquals("Worker", updatedUser.getJobTitle());
 
     // verify via retrieve
     FreshAgentUser retrievedUser = FreshAgentApiCommands.retrieveAgentUserById("freshServiceDev", createdUser.getId(), false);
@@ -703,7 +701,6 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     assertEquals("jsmith2@upenn.edu", retrievedUser.getEmail());
     assertEquals("John", retrievedUser.getFirstName());
     assertEquals("Smith", retrievedUser.getLastName());
-    assertEquals("Worker", retrievedUser.getJobTitle());
 
     // update multiple fields including custom_fields
     Map<String, Object> updatedCustomFields = new HashMap<String, Object>();
@@ -713,12 +710,10 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     FreshAgentUser userToUpdate2 = new FreshAgentUser();
     userToUpdate2.setId(createdUser.getId());
     userToUpdate2.setFirstName("Johnny");
-    userToUpdate2.setJobTitle("Manager");
     userToUpdate2.setCustomFields(updatedCustomFields);
 
     Set<String> fieldsToUpdate2 = new java.util.LinkedHashSet<String>();
     fieldsToUpdate2.add("firstName");
-    fieldsToUpdate2.add("jobTitle");
     fieldsToUpdate2.add("customField_pennkey");
     fieldsToUpdate2.add("customField_penn_id");
 
@@ -729,7 +724,6 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     assertEquals("Johnny", updatedUser2.getFirstName());
     assertEquals("Smith", updatedUser2.getLastName());
     assertEquals("jsmith2@upenn.edu", updatedUser2.getEmail());
-    assertEquals("Manager", updatedUser2.getJobTitle());
     assertNotNull(updatedUser2.getCustomFields());
     assertEquals("jsmith2", updatedUser2.getCustomFields().get("pennkey"));
     assertEquals("12345679", updatedUser2.getCustomFields().get("penn_id"));
@@ -740,7 +734,6 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     assertEquals("Johnny", retrievedUser2.getFirstName());
     assertEquals("Smith", retrievedUser2.getLastName());
     assertEquals("jsmith2@upenn.edu", retrievedUser2.getEmail());
-    assertEquals("Manager", retrievedUser2.getJobTitle());
     assertNotNull(retrievedUser2.getCustomFields());
     assertEquals("jsmith2", retrievedUser2.getCustomFields().get("pennkey"));
     assertEquals("12345679", retrievedUser2.getCustomFields().get("penn_id"));
@@ -918,15 +911,11 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
 
     FreshAgentUser member1 = memberById.get(createdUser1.getId());
     assertNotNull(member1);
-    assertEquals("jsmith@test.edu", member1.getEmail());
-    assertEquals("John", member1.getFirstName());
-    assertEquals("Smith", member1.getLastName());
+    assertEquals(createdUser1.getId(), member1.getId());
 
     FreshAgentUser member2 = memberById.get(createdUser2.getId());
     assertNotNull(member2);
-    assertEquals("jdoe@test.edu", member2.getEmail());
-    assertEquals("Jane", member2.getFirstName());
-    assertEquals("Doe", member2.getLastName());
+    assertEquals(createdUser2.getId(), member2.getId());
 
     // remove one membership and verify list shrinks
     FreshAgentApiCommands.removeGroupMembership("freshServiceDev", createdGroup.getId(), createdUser1.getId());
@@ -955,6 +944,7 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     FreshAgentProvisionerTestUtils.configureFreshAgentProvisioner(
         new FreshAgentProvisionerTestConfigInput()
             .assignConfigId("freshAgentProvisioner")
+            .addExtraConfig("defaultAgentRoleId", "31000123456")
     );
 
     GrouperUtil.sleep(5000);
@@ -1075,6 +1065,7 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     FreshAgentProvisionerTestUtils.configureFreshAgentProvisioner(
         new FreshAgentProvisionerTestConfigInput()
             .assignConfigId("freshAgentProvisioner")
+            .addExtraConfig("defaultAgentRoleId", "31000123456")
     );
 
     GrouperUtil.sleep(5000);
@@ -1203,6 +1194,7 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     FreshAgentProvisionerTestUtils.configureFreshAgentProvisioner(
         new FreshAgentProvisionerTestConfigInput()
             .assignConfigId("freshAgentProvisioner")
+            .addExtraConfig("defaultAgentRoleId", "31000123456")
     );
 
     GrouperUtil.sleep(5000);

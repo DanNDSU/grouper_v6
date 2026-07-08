@@ -489,6 +489,10 @@ public class FreshAgentMockServiceHandler extends MockServiceHandler {
 
       ObjectNode objectNode = freshAgentUser.toJson(null);
       objectNode.put("id", freshAgentUser.getId());
+      if (freshAgentUser.getActive() != null) {
+        objectNode.put("active", freshAgentUser.getActive().booleanValue());
+      }
+      
       usersArray.add(objectNode);
     }
 
@@ -519,13 +523,16 @@ public class FreshAgentMockServiceHandler extends MockServiceHandler {
     List<FreshAgentUser> freshAgentUsers = HibernateSession.byHqlStatic()
         .createQuery("from FreshAgentUser where id = :theId")
         .setLong("theId", userId).list(FreshAgentUser.class);
-
+    
     if (GrouperUtil.length(freshAgentUsers) == 1) {
       FreshAgentUser freshAgentUser = freshAgentUsers.get(0);
 
       ObjectNode resultNode = GrouperUtil.jsonJacksonNode();
       ObjectNode objectNode = freshAgentUser.toJson(null);
       objectNode.put("id", freshAgentUser.getId());
+      if (freshAgentUser.getActive() != null) {
+        objectNode.put("active", freshAgentUser.getActive().booleanValue());
+      }
       resultNode.set("agent", objectNode);
 
       mockServiceResponse.setResponseCode(200);
@@ -598,6 +605,9 @@ public class FreshAgentMockServiceHandler extends MockServiceHandler {
     ObjectNode resultNode = GrouperUtil.jsonJacksonNode();
     ObjectNode objectNode = freshAgentUser.toJson(null);
     objectNode.put("id", freshAgentUser.getId());
+    if (freshAgentUser.getActive() != null) {
+      objectNode.put("active", freshAgentUser.getActive().booleanValue());
+    }
     resultNode.set("agent", objectNode);
 
     mockServiceResponse.setResponseCode(201);
@@ -735,6 +745,9 @@ public class FreshAgentMockServiceHandler extends MockServiceHandler {
     ObjectNode resultNode = GrouperUtil.jsonJacksonNode();
     ObjectNode objectNode = freshAgentUser.toJson(null);
     objectNode.put("id", freshAgentUser.getId());
+    if (freshAgentUser.getActive() != null) {
+      objectNode.put("active", freshAgentUser.getActive().booleanValue());
+    }
     resultNode.set("agent", objectNode);
 
     mockServiceResponse.setResponseCode(200);
