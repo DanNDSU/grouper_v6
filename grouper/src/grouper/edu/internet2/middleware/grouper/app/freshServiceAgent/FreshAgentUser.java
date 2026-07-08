@@ -45,7 +45,6 @@ public class FreshAgentUser {
       
       GrouperDdlUtils.ddlutilsFindOrCreateIndex(database, tableName, "mock_freshagent_user_name_idx", true, "email");
     }
-    
   }
   
   private Long id;
@@ -584,13 +583,40 @@ public class FreshAgentUser {
       result.put("email", this.email);
     }
 
-    // NOTE: This provisioner only writes the following Agent fields to Freshservice:
-    //   id, first_name, last_name, email, roles, custom_fields
-    // The model still carries jobTitle, workPhoneNumber, departmentId, reportingManagerId,
-    // address, externalId and active (read from GETs and used for matching/state), but they
-    // are intentionally NOT emitted into POST/PUT bodies. Sending unmanaged or read-only
-    // fields causes Freshservice to return HTTP 400 (readonly_field / invalid_field), so we
-    // build every write body from the explicit whitelist below.
+    // NOTE: The actual POST/PUT write body sent to Freshservice is built by
+    // FreshAgentApiCommands.buildWritableAgentNode() from an explicit whitelist
+    // (WRITABLE_AGENT_FIELDS), NOT by this method. This toJson() is used for the
+    // mock service handler's GET serialization and for logging, so it emits the
+    // full set of managed fields (everything except id and active, which are
+    // handled separately by callers). department is emitted as the Freshservice
+    // department_ids array to match how fromJson reads it.
+
+    if (fieldNamesToSet == null || fieldNamesToSet.contains("jobTitle")) {
+      result.put("job_title", this.jobTitle);
+    }
+    if (fieldNamesToSet == null || fieldNamesToSet.contains("workPhoneNumber")) {
+      result.put("work_phone_number", this.workPhoneNumber);
+    }
+    if (fieldNamesToSet == null || fieldNamesToSet.contains("departmentId")) {
+      com.fasterxml.jackson.databind.node.ArrayNode departmentIdsNode = GrouperUtil.jsonJacksonArrayNode();
+      if (this.departmentId != null) {
+        departmentIdsNode.add(this.departmentId.longValue());
+      }
+      result.set("department_ids", departmentIdsNode);
+    }
+    if (fieldNamesToSet == null || fieldNamesToSet.contains("reportingManagerId")) {
+      if (this.reportingManagerId != null) {
+        result.put("reporting_manager_id", this.reportingManagerId.longValue());
+      } else {
+        result.putNull("reporting_manager_id");
+      }
+    }
+    if (fieldNamesToSet == null || fieldNamesToSet.contains("address")) {
+      result.put("address", this.address);
+    }
+    if (fieldNamesToSet == null || fieldNamesToSet.contains("externalId")) {
+      result.put("external_id", this.externalId);
+    }
 
     // roles array: only include when we have it and it is being set. Required by Freshservice on create.
     if (fieldNamesToSet == null || fieldNamesToSet.contains("roles")) {

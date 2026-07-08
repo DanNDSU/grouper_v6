@@ -352,12 +352,16 @@ public class FreshAgentApiCommands {
    * and are nested under the JSON "custom_fields" object.
    */
   private static final Set<String> WRITABLE_AGENT_FIELDS = GrouperUtil.toSet(
-      "firstName", "lastName", "email", "roles");
+      "firstName", "lastName", "email", "roles",
+      "jobTitle", "workPhoneNumber", "departmentId", "reportingManagerId",
+      "address", "externalId");
 
   /**
    * Build a Freshservice agent write body (POST/PUT) containing only the fields
-   * this provisioner is allowed to write: first_name, last_name, email, roles,
-   * and custom_fields. Reads its values from the supplied FreshAgentUser.
+   * this provisioner is allowed to write: first_name, last_name, email,
+   * job_title, work_phone_number, department_ids, reporting_manager_id, address,
+   * external_id, roles, and custom_fields. (Everything except id and active.)
+   * Reads its values from the supplied FreshAgentUser.
    *
    * @param grouperAgentUser the agent whose writable values to serialize
    * @param fieldsToWrite the Java field names to include. If null, all writable
@@ -397,6 +401,62 @@ public class FreshAgentApiCommands {
         result.put("email", grouperAgentUser.getEmail());
       } else {
         result.putNull("email");
+      }
+    }
+
+    // jobTitle -> job_title
+    if (fieldsToWrite == null || fieldsToWrite.contains("jobTitle")) {
+      if (grouperAgentUser.getJobTitle() != null) {
+        result.put("job_title", grouperAgentUser.getJobTitle());
+      } else {
+        result.putNull("job_title");
+      }
+    }
+
+    // workPhoneNumber -> work_phone_number
+    if (fieldsToWrite == null || fieldsToWrite.contains("workPhoneNumber")) {
+      if (grouperAgentUser.getWorkPhoneNumber() != null) {
+        result.put("work_phone_number", grouperAgentUser.getWorkPhoneNumber());
+      } else {
+        result.putNull("work_phone_number");
+      }
+    }
+
+    // departmentId -> department_ids (Freshservice expects an array on writes).
+    // We model a single departmentId, so we emit a one-element array. When the
+    // value is null we send an empty array to clear the association.
+    if (fieldsToWrite == null || fieldsToWrite.contains("departmentId")) {
+      ArrayNode departmentIdsNode = GrouperUtil.jsonJacksonArrayNode();
+      if (grouperAgentUser.getDepartmentId() != null) {
+        departmentIdsNode.add(grouperAgentUser.getDepartmentId().longValue());
+      }
+      result.set("department_ids", departmentIdsNode);
+    }
+
+    // reportingManagerId -> reporting_manager_id
+    if (fieldsToWrite == null || fieldsToWrite.contains("reportingManagerId")) {
+      if (grouperAgentUser.getReportingManagerId() != null) {
+        result.put("reporting_manager_id", grouperAgentUser.getReportingManagerId().longValue());
+      } else {
+        result.putNull("reporting_manager_id");
+      }
+    }
+
+    // address -> address
+    if (fieldsToWrite == null || fieldsToWrite.contains("address")) {
+      if (grouperAgentUser.getAddress() != null) {
+        result.put("address", grouperAgentUser.getAddress());
+      } else {
+        result.putNull("address");
+      }
+    }
+
+    // externalId -> external_id
+    if (fieldsToWrite == null || fieldsToWrite.contains("externalId")) {
+      if (grouperAgentUser.getExternalId() != null) {
+        result.put("external_id", grouperAgentUser.getExternalId());
+      } else {
+        result.putNull("external_id");
       }
     }
 
@@ -1471,6 +1531,5 @@ public class FreshAgentApiCommands {
       FreshAgentLog.freshserviceLog(debugMap, startTime);
     }
   }
-
 
 }
