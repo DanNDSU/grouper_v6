@@ -490,6 +490,7 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     userToCreate.setFirstName("New");
     userToCreate.setLastName("Agent");
     userToCreate.setEmail("newagent@test.edu");
+    userToCreate.setJobTitle("Software Engineer");
     userToCreate.setRolesJson(rolesJsonForRole(31000111111L));
 
     FreshAgentUser createdUser = FreshAgentApiCommands.createAgentUser("freshServiceDev", userToCreate);
@@ -499,6 +500,7 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     assertEquals("newagent@test.edu", createdUser.getEmail());
     assertEquals("New", createdUser.getFirstName());
     assertEquals("Agent", createdUser.getLastName());
+    assertEquals("Software Engineer", createdUser.getJobTitle());
 
     // verify via retrieve, including roles round-trip
     FreshAgentUser retrievedUser = FreshAgentApiCommands.retrieveAgentUserById("freshServiceDev", createdUser.getId(), false);
@@ -506,6 +508,7 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     assertEquals("newagent@test.edu", retrievedUser.getEmail());
     assertTrue(retrievedUser.hasRoles());
     assertTrue(retrievedUser.getRolesJson().contains("31000111111"));
+    assertEquals("Software Engineer", retrievedUser.getJobTitle());
   }
 
   /**
@@ -671,6 +674,7 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     userToCreate.setFirstName("John");
     userToCreate.setLastName("Smith");
     userToCreate.setEmail("jsmith@test.edu");
+    userToCreate.setJobTitle("Software Engineer");
     userToCreate.setActive(true);
     userToCreate.setDepartmentId(39000211201L);
     userToCreate.setCustomFields(customFields);
@@ -683,9 +687,11 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     FreshAgentUser userToUpdate = new FreshAgentUser();
     userToUpdate.setId(createdUser.getId());
     userToUpdate.setEmail("jsmith2@upenn.edu");
+    userToUpdate.setJobTitle("Software Engineer 2");
 
     Set<String> fieldsToUpdate = new java.util.LinkedHashSet<String>();
     fieldsToUpdate.add("email");
+    fieldsToUpdate.add("jobTitle");
 
     FreshAgentUser updatedUser = FreshAgentApiCommands.updateAgentUser("freshServiceDev", userToUpdate, fieldsToUpdate);
 
@@ -694,6 +700,7 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     assertEquals("jsmith2@upenn.edu", updatedUser.getEmail());
     assertEquals("John", updatedUser.getFirstName());
     assertEquals("Smith", updatedUser.getLastName());
+    assertEquals("Software Engineer 2", updatedUser.getJobTitle());
 
     // verify via retrieve
     FreshAgentUser retrievedUser = FreshAgentApiCommands.retrieveAgentUserById("freshServiceDev", createdUser.getId(), false);
@@ -701,6 +708,7 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     assertEquals("jsmith2@upenn.edu", retrievedUser.getEmail());
     assertEquals("John", retrievedUser.getFirstName());
     assertEquals("Smith", retrievedUser.getLastName());
+    assertEquals("Software Engineer 2", retrievedUser.getJobTitle());
 
     // update multiple fields including custom_fields
     Map<String, Object> updatedCustomFields = new HashMap<String, Object>();
