@@ -36,33 +36,8 @@ public class FreshRequesterApiCommands {
     
     try {
 //      String configId = "freshServiceDev";
-    String configId = "freshserviceRequester";
+      String configId = "freshserviceRequester";
     
-//    FreshRequesterGroup group = new FreshRequesterGroup();
-//    group.setName("Test Grouper Update");
-//    group.setDescription("Testing Grouper mock service Update method");
-//    group.setId(44209747L);
-//    updateRequesterGroup(configId, group);
-//    createRequesterGroup(configId, group);
-//    
-//    List<FreshRequesterGroup> groups = retrieveRequesterGroups(configId);
-//    System.out.println(groups.size());
-
-//    List<FreshRequesterUser> users = retrieveRequesterUsers(configId);
-//    System.out.println(users.size());
-    
-//    FreshRequesterUser user = new FreshRequesterUser();
-//    user.setFirstName("A");
-//    user.setLastName("TestUser");
-//    user.setEmail("a.testuser@test.edu");
-//    createRequesterUser(configId, user);
-    
-//    deleteRequesterGroup(configId, 8070026L);
-
-      List<FreshRequesterGroup> groups = retrieveRequesterGroups(configId);
-      for (FreshRequesterGroup group : GrouperUtil.nonNull(groups)) {
-        System.out.println("Group: " + group.toString());
-      }
     
       System.out.println("done");
 

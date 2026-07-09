@@ -37,6 +37,12 @@ public class FreshAgentApiCommands {
       String configId = "freshserviceRequester";
       
       //Test API calls here
+      FreshAgentUser user = new FreshAgentUser();
+      user.setFirstName("Agent");
+      user.setLastName("Test");
+      user.setEmail("agent.test@test.edu");
+      
+      createAgentUser(configId, user);
       
     } catch (Exception e) {
       System.out.println("Error: " + GrouperClientUtils.getFullStackTrace(e));
@@ -535,12 +541,27 @@ public class FreshAgentApiCommands {
    * Create a Freshservice agent (see {@link #createAgentUser(String, FreshAgentUser)}),
    * with control over how an existing inactive agent is reactivated.
    *
+   * Resolution order for the supplied email:
+   *   1. If an AGENT already exists with this email:
+   *      - inactive  -> reactivate, then update writable fields
+   *      - active    -> update writable fields
+   *   2. Else if a REQUESTER already exists with this email:
+   *      Freshservice enforces a single unique email across both the agent and
+   *      requester namespaces, so a plain POST /api/v2/agents would be rejected
+   *      with a duplicate-email validation error ("User already exists"). The
+   *      correct path is to CONVERT the requester into an agent via
+   *      PUT /api/v2/requesters/{id}/convert_to_agent, then update the resulting
+   *      agent with our writable fields. Conversion produces an occasional agent
+   *      with the SD Agent role and no group memberships, and consumes a license
+   *      seat immediately.
+   *   3. Else create a brand new agent via POST /api/v2/agents.
+   *
    * @param configId the id of the external system
    * @param grouperAgentUser the agent to be created (or updated if it exists)
    * @param reactivateAsFullTime when an existing agent is inactive and must be
    *   reactivated first, whether to restore them as full-time (true) or leave
    *   them occasional (false)
-   * @return the created or updated agent
+   * @return the created, converted, or updated agent
    */
   public static FreshAgentUser createAgentUser(String configId, FreshAgentUser grouperAgentUser, boolean reactivateAsFullTime) {
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
@@ -551,13 +572,14 @@ public class FreshAgentApiCommands {
 
     try {
 
-      // look up existing agent by email address
+      // 1. look up existing AGENT by email address
       FreshAgentUser existingUser = null;
       if (!StringUtils.isBlank(grouperAgentUser.getEmail())) {
         existingUser = retrieveAgentUserByEmail(configId, grouperAgentUser.getEmail(), true);
       }
 
       if (existingUser != null) {
+        debugMap.put("resolution", "existingAgent");
 
         // if the existing agent is not active, reactivate it first
         if (existingUser.getActive() == null || !existingUser.getActive()) {
@@ -565,38 +587,197 @@ public class FreshAgentApiCommands {
         }
 
         // agent already exists - update the writable fields
-        Set<String> fieldsToUpdate = new java.util.LinkedHashSet<String>();
-        fieldsToUpdate.add("firstName");
-        fieldsToUpdate.add("lastName");
-        fieldsToUpdate.add("email");
-
-        // Only push roles to an existing agent when this entity actually carries
-        // roles. A configured default role is meant for brand new agents only;
-        // including "roles" unconditionally here would overwrite an existing
-        // agent's real roles with the default. (buildWritableAgentNode also skips
-        // a blank rolesJson, but leaving "roles" out of the field set makes the
-        // intent explicit and avoids a needless no-op.)
-        if (grouperAgentUser.hasRoles()) {
-          fieldsToUpdate.add("roles");
-        }
-
-        // include any custom fields carried on the grouperAgentUser
-        if (grouperAgentUser.getCustomFields() != null) {
-          for (String customFieldName : grouperAgentUser.getCustomFields().keySet()) {
-            if (!StringUtils.isBlank(customFieldName)) {
-              fieldsToUpdate.add(FreshAgentUser.CUSTOM_FIELD_ATTRIBUTE_PREFIX + customFieldName);
-            }
-          }
-        }
-
-        // set the id from the existing agent so updateAgentUser can find it
         grouperAgentUser.setId(existingUser.getId());
-
-        return updateAgentUser(configId, grouperAgentUser, fieldsToUpdate);
+        return updateAgentUser(configId, grouperAgentUser, buildFieldsToUpdateForExisting(grouperAgentUser));
       }
 
-      // no existing agent found - create a new one via POST
+      // 2. no agent found - check whether a REQUESTER holds this email.
+      // Freshservice shares a single unique-email constraint across agents and
+      // requesters, so if a requester owns the email we must convert rather than
+      // POST (which would fail as a duplicate).
+      Long requesterId = null;
+      if (!StringUtils.isBlank(grouperAgentUser.getEmail())) {
+        requesterId = retrieveRequesterIdByEmail(configId, grouperAgentUser.getEmail());
+      }
+
+      if (requesterId != null) {
+        debugMap.put("resolution", "convertRequester");
+        debugMap.put("requesterId", requesterId);
+
+        // convert the requester into an (occasional) agent, then update our
+        // writable fields onto the resulting agent
+        FreshAgentUser convertedAgent = convertRequesterToAgent(configId, requesterId);
+
+        if (convertedAgent == null || convertedAgent.getId() == null) {
+          throw new RuntimeException("convert_to_agent returned no usable agent for requesterId=" + requesterId
+              + " email=" + grouperAgentUser.getEmail());
+        }
+
+        // convert produces an occasional agent; optionally restore full-time,
+        // mirroring the reactivate path's semantics
+        if (reactivateAsFullTime) {
+          ObjectNode fullTimeBody = GrouperUtil.jsonJacksonNode();
+          fullTimeBody.put("occasional", false);
+          String fullTimeJson = GrouperUtil.jsonJacksonToString(fullTimeBody);
+          executeMethod(debugMap, "createAgentUser", "PUT", configId,
+              "api/v2/agents/" + String.valueOf(convertedAgent.getId()),
+              GrouperUtil.toSet(200, 201), new int[] { -1 }, fullTimeJson, null, false, null);
+        }
+
+        grouperAgentUser.setId(convertedAgent.getId());
+        return updateAgentUser(configId, grouperAgentUser, buildFieldsToUpdateForExisting(grouperAgentUser));
+      }
+
+      // 3. no existing agent or requester - create a new agent via POST
+      debugMap.put("resolution", "createNew");
       return createAgentUserHelper(configId, grouperAgentUser);
+
+    } catch (RuntimeException re) {
+      debugMap.put("exception", GrouperClientUtils.getFullStackTrace(re));
+      throw re;
+    } finally {
+      FreshAgentLog.freshserviceLog(debugMap, startTime);
+    }
+  }
+
+  /**
+   * Build the set of writable fields to push onto an agent that already exists
+   * (whether it was found directly, reactivated, or converted from a requester).
+   *
+   * Always writes first_name, last_name, email. Only writes roles when this
+   * entity actually carries roles - a configured default role is meant for
+   * brand new agents only, so including "roles" unconditionally would overwrite
+   * an existing (or freshly converted) agent's real roles with the default.
+   * Includes any custom fields carried on the grouperAgentUser.
+   */
+  private static Set<String> buildFieldsToUpdateForExisting(FreshAgentUser grouperAgentUser) {
+    Set<String> fieldsToUpdate = new java.util.LinkedHashSet<String>();
+    fieldsToUpdate.add("firstName");
+    fieldsToUpdate.add("lastName");
+    fieldsToUpdate.add("email");
+
+    if (grouperAgentUser.hasRoles()) {
+      fieldsToUpdate.add("roles");
+    }
+
+    if (grouperAgentUser.getCustomFields() != null) {
+      for (String customFieldName : grouperAgentUser.getCustomFields().keySet()) {
+        if (!StringUtils.isBlank(customFieldName)) {
+          fieldsToUpdate.add(FreshAgentUser.CUSTOM_FIELD_ATTRIBUTE_PREFIX + customFieldName);
+        }
+      }
+    }
+    return fieldsToUpdate;
+  }
+
+  /**
+   * Look up a Freshservice requester id by email address.
+   *   GET /api/v2/requesters?email=jsmith@upenn.edu
+   *
+   * Returns the requester's id, or null if no requester holds this email. Used
+   * by {@link #createAgentUser} to decide between converting an existing
+   * requester and creating a brand new agent.
+   *
+   * NOTE: this is a minimal lookup that returns only the id, since convert only
+   * needs the id. If your codebase already exposes a fuller requester-lookup
+   * method, prefer delegating to that.
+   *
+   * @param configId the id of the external system
+   * @param email the email address to search for
+   * @return the requester id, or null if not found
+   */
+  public static Long retrieveRequesterIdByEmail(String configId, String email) {
+    Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
+
+    debugMap.put("method", "retrieveRequesterIdByEmail");
+
+    long startTime = System.nanoTime();
+
+    try {
+      if (StringUtils.isBlank(email)) {
+        return null;
+      }
+
+      String urlSuffix = "api/v2/requesters?email=" + GrouperUtil.escapeUrlEncode(email);
+      int[] returnCode = new int[] { -1 };
+      JsonNode jsonNode = executeMethod(debugMap, "retrieveRequesterIdByEmail", "GET", configId, urlSuffix,
+          GrouperUtil.toSet(200), returnCode, null, null, false, null);
+
+      if (jsonNode == null) {
+        return null;
+      }
+
+      ArrayNode requestersArray = (ArrayNode) jsonNode.get("requesters");
+      if (requestersArray == null || requestersArray.size() == 0) {
+        return null;
+      }
+
+      if (requestersArray.size() > 1) {
+        throw new RuntimeException("Expected 0 or 1 requesters for email '" + email
+            + "', but found " + requestersArray.size());
+      }
+
+      JsonNode idNode = requestersArray.get(0).get("id");
+      if (idNode == null || !idNode.isNumber()) {
+        return null;
+      }
+      return idNode.longValue();
+
+    } catch (RuntimeException re) {
+      debugMap.put("exception", GrouperClientUtils.getFullStackTrace(re));
+      throw re;
+    } finally {
+      FreshAgentLog.freshserviceLog(debugMap, startTime);
+    }
+  }
+
+  /**
+   * Convert an existing Freshservice requester into an agent.
+   *   PUT /api/v2/requesters/{id}/convert_to_agent
+   *
+   * Freshservice enforces a single unique email across the agent and requester
+   * namespaces, so an agent cannot be POSTed for an email already held by a
+   * requester - the requester must be converted instead. Conversion yields an
+   * OCCASIONAL agent with the SD Agent role and no group memberships, and
+   * consumes a license seat immediately. The response body is the newly created
+   * agent (wrapped under "agent").
+   *
+   * @param configId the id of the external system
+   * @param requesterId the id of the requester to convert
+   * @return the resulting agent parsed from the convert response
+   */
+  public static FreshAgentUser convertRequesterToAgent(String configId, Long requesterId) {
+    Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
+
+    debugMap.put("method", "convertRequesterToAgent");
+    debugMap.put("requesterId", requesterId);
+
+    long startTime = System.nanoTime();
+
+    try {
+      if (requesterId == null) {
+        throw new RuntimeException("requesterId is null");
+      }
+
+      String urlSuffix = "api/v2/requesters/" + String.valueOf(requesterId) + "/convert_to_agent";
+      int[] returnCode = new int[] { -1 };
+
+      // convert_to_agent takes no body; send an empty JSON object so the
+      // Content-Type: application/json header (added for PUT) has a valid payload
+      JsonNode jsonNode = executeMethod(debugMap, "convertRequesterToAgent", "PUT", configId, urlSuffix,
+          GrouperUtil.toSet(200, 201), returnCode, "{}", null, false, null);
+
+      // response wraps the new agent under "agent". If your sandbox returns the
+      // agent object at the top level instead, fall back to the root node.
+      JsonNode agentNode = GrouperUtil.jsonJacksonGetNode(jsonNode, "agent");
+      if (agentNode == null) {
+        agentNode = jsonNode;
+      }
+      if (agentNode == null) {
+        return null;
+      }
+
+      return FreshAgentUser.fromJson(agentNode);
 
     } catch (RuntimeException re) {
       debugMap.put("exception", GrouperClientUtils.getFullStackTrace(re));
