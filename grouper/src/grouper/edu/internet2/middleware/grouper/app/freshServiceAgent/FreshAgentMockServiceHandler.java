@@ -1,5 +1,6 @@
 package edu.internet2.middleware.grouper.app.freshServiceAgent;
 
+import java.sql.Types;
 import java.util.List;
 import java.util.Set;
 
@@ -16,6 +17,7 @@ import edu.internet2.middleware.grouper.ddl.DdlVersionBean;
 import edu.internet2.middleware.grouper.ddl.GrouperDdlUtils;
 import edu.internet2.middleware.grouper.ddl.GrouperMockDdl;
 import edu.internet2.middleware.grouper.ext.org.apache.ddlutils.model.Database;
+import edu.internet2.middleware.grouper.ext.org.apache.ddlutils.model.Table;
 import edu.internet2.middleware.grouper.hibernate.ByHqlStatic;
 import edu.internet2.middleware.grouper.hibernate.HibernateSession;
 import edu.internet2.middleware.grouper.internal.dao.GrouperDAOException;
@@ -68,6 +70,7 @@ public class FreshAgentMockServiceHandler extends MockServiceHandler {
       new GcDbAccess().sql("select count(*) from mock_freshagent_group").select(int.class);
       new GcDbAccess().sql("select count(*) from mock_freshagent_user").select(int.class);
       new GcDbAccess().sql("select count(*) from mock_freshagent_membership").select(int.class);
+      new GcDbAccess().sql("select count(*) from mock_freshagent_requester").select(int.class);
     } catch (Exception e) {
 
       //we need to delete the test table if it is there, and create a new one
@@ -81,12 +84,43 @@ public class FreshAgentMockServiceHandler extends MockServiceHandler {
           FreshAgentGroup.createTableFreshGroup(ddlVersionBean, database);
           FreshAgentUser.createTableFreshUser(ddlVersionBean, database);
           FreshAgentMembership.createTableFreshMembership(ddlVersionBean, database);
+          createTableFreshRequester(ddlVersionBean, database);
 
         }
       });
 
     }
 
+  }
+
+  /**
+   * Create the mock_freshagent_requester table. This models the Freshservice
+   * REQUESTER namespace, which is entirely separate from mock_freshagent_user
+   * (the AGENT namespace) - matching real Freshservice, where /api/v2/agents and
+   * /api/v2/requesters are disjoint resources.
+   *
+   * This table is intentionally NOT a Hibernate-mapped entity (unlike
+   * FreshAgentUser/FreshAgentGroup/FreshAgentMembership). It only needs to
+   * support two operations - lookup by email, and convert-to-agent (delete here,
+   * insert into mock_freshagent_user) - so it is read and written with plain SQL
+   * via GcDbAccess rather than adding a new Hibernate entity/mapping.
+   */
+  private static void createTableFreshRequester(DdlVersionBean ddlVersionBean, Database database) {
+
+    final String tableName = "mock_freshagent_requester";
+
+    try {
+      new GcDbAccess().sql("select count(*) from " + tableName).select(int.class);
+    } catch (Exception e) {
+      Table requesterTable = GrouperDdlUtils.ddlutilsFindOrCreateTable(database, tableName);
+      GrouperDdlUtils.ddlutilsFindOrCreateColumn(requesterTable, "id", Types.BIGINT, "20", true, true);
+      GrouperDdlUtils.ddlutilsFindOrCreateColumn(requesterTable, "email", Types.VARCHAR, "256", false, false);
+      GrouperDdlUtils.ddlutilsFindOrCreateColumn(requesterTable, "first_name", Types.VARCHAR, "256", false, false);
+      GrouperDdlUtils.ddlutilsFindOrCreateColumn(requesterTable, "last_name", Types.VARCHAR, "256", false, false);
+      GrouperDdlUtils.ddlutilsFindOrCreateColumn(requesterTable, "active", Types.VARCHAR, "1", false, false);
+
+      GrouperDdlUtils.ddlutilsFindOrCreateIndex(database, tableName, "mock_freshagent_requester_email_idx", true, "email");
+    }
   }
 
   /**
@@ -885,6 +919,157 @@ public class FreshAgentMockServiceHandler extends MockServiceHandler {
     mockServiceResponse.setContentType("application/json");
   }
 
+  // ==================== Requester operations ====================
+  //
+  // These model just enough of the Freshservice REQUESTER namespace to support
+  // FreshAgentApiCommands.createAgentUser's convert-existing-requester path:
+  // look a requester up by email, and convert it into an agent. Requesters live
+  // in mock_freshagent_requester (see createTableFreshRequester), a separate
+  // table from mock_freshagent_user, and are read/written with plain SQL since
+  // there is no Hibernate-mapped FreshAgentRequester entity.
+
+  /**
+   * GET /requesters?email=&lt;email&gt; - return the requester matching the email,
+   * wrapped in a "requesters" array (0 or 1 elements; email is unique).
+   */
+  public void getRequestersByEmail(MockServiceRequest mockServiceRequest, MockServiceResponse mockServiceResponse) {
+    try {
+      checkAuthorization(mockServiceRequest);
+    } catch (RuntimeException e) {
+      mockServiceResponse.setResponseCode(401);
+      throw e;
+    }
+
+    String email = mockServiceRequest.getHttpServletRequest().getParameter("email");
+
+    ArrayNode requestersArray = GrouperUtil.jsonJacksonArrayNode();
+
+    if (StringUtils.isNotBlank(email)) {
+      Long requesterId = new GcDbAccess().connectionName("grouper")
+          .sql("select id from mock_freshagent_requester where email = ?")
+          .addBindVar(email).select(Long.class);
+
+      if (requesterId != null) {
+        requestersArray.add(requesterRowToJson(requesterId));
+      }
+    }
+
+    ObjectNode resultNode = GrouperUtil.jsonJacksonNode();
+    resultNode.set("requesters", requestersArray);
+
+    mockServiceResponse.setResponseCode(200);
+    mockServiceResponse.setContentType("application/json");
+    mockServiceResponse.setResponseBody(GrouperUtil.jsonJacksonToString(resultNode));
+  }
+
+  /**
+   * PUT /requesters/{id}/convert_to_agent - convert a requester into an agent.
+   *
+   * Removes the row from mock_freshagent_requester and inserts a corresponding
+   * row into mock_freshagent_user, reusing the same id (so callers that captured
+   * the requester id can find the resulting agent at that id, matching real
+   * Freshservice's convert_to_agent semantics). The converted agent is active
+   * with no roles; FreshAgentApiCommands.createAgentUser follows this call with
+   * an updateAgentUser to apply roles and other writable fields.
+   *
+   * Returns 404 if no such requester exists.
+   */
+  public void convertRequesterToAgent(MockServiceRequest mockServiceRequest, MockServiceResponse mockServiceResponse) {
+    try {
+      checkAuthorization(mockServiceRequest);
+    } catch (RuntimeException e) {
+      mockServiceResponse.setResponseCode(401);
+      throw e;
+    }
+
+    String requesterIdString = mockServiceRequest.getPostMockNamePaths()[1];
+    GrouperUtil.assertion(GrouperUtil.length(requesterIdString) > 0, "requesterId is required");
+
+    long requesterId = GrouperUtil.longValue(requesterIdString);
+
+    String email = new GcDbAccess().connectionName("grouper")
+        .sql("select email from mock_freshagent_requester where id = ?")
+        .addBindVar(requesterId).select(String.class);
+
+    if (StringUtils.isBlank(email)) {
+      // no id column matched (select returns null on no rows for a scalar select)
+      mockServiceResponse.setResponseCode(404);
+      mockServiceResponse.setContentType("application/json");
+      return;
+    }
+
+    String firstName = new GcDbAccess().connectionName("grouper")
+        .sql("select first_name from mock_freshagent_requester where id = ?")
+        .addBindVar(requesterId).select(String.class);
+    String lastName = new GcDbAccess().connectionName("grouper")
+        .sql("select last_name from mock_freshagent_requester where id = ?")
+        .addBindVar(requesterId).select(String.class);
+
+    // remove from the requester namespace
+    new GcDbAccess().connectionName("grouper")
+        .sql("delete from mock_freshagent_requester where id = ?")
+        .addBindVar(requesterId).executeSql();
+
+    // Insert into the agent namespace, reusing the same id. Converted agents are
+    // active with no roles/custom fields; the caller (createAgentUser) applies
+    // writable fields via a follow-up update (PUT /agents/{id}).
+    //
+    // Persist via Hibernate (byObjectStatic().save), NOT raw SQL, so the agent
+    // row is created exactly the way every other agent-writing method in this
+    // mock creates it (postUser/updateUser/reactivateUser). The follow-up
+    // updateUser loads the agent through Hibernate HQL and calls saveOrUpdate;
+    // creating this row with a raw INSERT behind Hibernate's back risks a stale
+    // first-level cache or a duplicate-id INSERT on that follow-up. Reusing the
+    // requester's id as the agent id is safe because ids are unique across the
+    // two mock tables (both draw from the same random-id space in seeding).
+    FreshAgentUser convertedAgent = new FreshAgentUser();
+    convertedAgent.setId(requesterId);
+    convertedAgent.setEmail(email);
+    convertedAgent.setFirstName(firstName);
+    convertedAgent.setLastName(lastName);
+    convertedAgent.setActive(true);
+
+    HibernateSession.byObjectStatic().save(convertedAgent);
+
+    ObjectNode resultNode = GrouperUtil.jsonJacksonNode();
+    ObjectNode objectNode = convertedAgent.toJson(null);
+    objectNode.put("id", convertedAgent.getId());
+    objectNode.put("active", true);
+    resultNode.set("agent", objectNode);
+
+    mockServiceResponse.setResponseCode(200);
+    mockServiceResponse.setContentType("application/json");
+    mockServiceResponse.setResponseBody(GrouperUtil.jsonJacksonToString(resultNode));
+  }
+
+  /**
+   * Build the JSON for a single requester row identified by id. Issued as
+   * individual scalar column selects (matching the only GcDbAccess query shape
+   * used elsewhere in this mock) rather than a single multi-column row read.
+   */
+  private ObjectNode requesterRowToJson(Long requesterId) {
+    String email = new GcDbAccess().connectionName("grouper")
+        .sql("select email from mock_freshagent_requester where id = ?")
+        .addBindVar(requesterId).select(String.class);
+    String firstName = new GcDbAccess().connectionName("grouper")
+        .sql("select first_name from mock_freshagent_requester where id = ?")
+        .addBindVar(requesterId).select(String.class);
+    String lastName = new GcDbAccess().connectionName("grouper")
+        .sql("select last_name from mock_freshagent_requester where id = ?")
+        .addBindVar(requesterId).select(String.class);
+    String active = new GcDbAccess().connectionName("grouper")
+        .sql("select active from mock_freshagent_requester where id = ?")
+        .addBindVar(requesterId).select(String.class);
+
+    ObjectNode objectNode = GrouperUtil.jsonJacksonNode();
+    objectNode.put("id", requesterId);
+    objectNode.put("email", email);
+    objectNode.put("first_name", firstName);
+    objectNode.put("last_name", lastName);
+    objectNode.put("active", "T".equals(active));
+    return objectNode;
+  }
+
   // ==================== Request routing ====================
 
   @Override
@@ -955,6 +1140,11 @@ public class FreshAgentMockServiceHandler extends MockServiceHandler {
         getUser(mockServiceRequest, mockServiceResponse);
         return;
       }
+      // GET /requesters?email=...
+      if ("requesters".equals(mockNamePaths.get(0)) && 1 == mockNamePaths.size()) {
+        getRequestersByEmail(mockServiceRequest, mockServiceResponse);
+        return;
+      }
     }
 
     // POST requests
@@ -987,6 +1177,12 @@ public class FreshAgentMockServiceHandler extends MockServiceHandler {
       // PUT /agents/{id}
       if ("agents".equals(mockNamePaths.get(0)) && 2 == mockNamePaths.size()) {
         updateUser(mockServiceRequest, mockServiceResponse);
+        return;
+      }
+      // PUT /requesters/{id}/convert_to_agent
+      if ("requesters".equals(mockNamePaths.get(0)) && 3 == mockNamePaths.size()
+          && "convert_to_agent".equals(mockNamePaths.get(2))) {
+        convertRequesterToAgent(mockServiceRequest, mockServiceResponse);
         return;
       }
     }

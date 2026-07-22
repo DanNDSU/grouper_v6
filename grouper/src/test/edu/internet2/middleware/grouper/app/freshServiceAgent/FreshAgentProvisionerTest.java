@@ -1,5 +1,6 @@
 package edu.internet2.middleware.grouper.app.freshServiceAgent;
 
+
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -55,6 +56,7 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     new GcDbAccess().connectionName("grouper").sql("delete from mock_freshagent_membership").executeSql();
     new GcDbAccess().connectionName("grouper").sql("delete from mock_freshagent_group").executeSql();
     new GcDbAccess().connectionName("grouper").sql("delete from mock_freshagent_user").executeSql();
+    new GcDbAccess().connectionName("grouper").sql("delete from mock_freshagent_requester").executeSql();
   }
 
   public void testRetrieveAgentGroups() {
@@ -1877,5 +1879,249 @@ public class FreshAgentProvisionerTest extends GrouperProvisioningBaseTest {
     return agent;
   }
 
-}
+  // ============================================================================
+  // Requester-to-agent conversion tests
+  //
+  // These exercise the branch in createAgentUser: when no AGENT holds the email
+  // but a REQUESTER does, createAgentUser converts the requester into an agent
+  // (PUT /api/v2/requesters/{id}/convert_to_agent) rather than POSTing a new
+  // agent, which Freshservice would reject as a duplicate email.
+  //
+  // Requesters live in mock_freshagent_requester, a table separate from
+  // mock_freshagent_user, mirroring Freshservice's actual separation of the
+  // agent and requester namespaces. See seedRequester below.
+  // ============================================================================
 
+  /**
+   * When no agent exists for the email but a requester does, createAgentUser
+   * should convert the requester into an agent (reusing the requester's id) and
+   * then apply the writable fields - rather than creating a brand new agent.
+   */
+  public void testCreateAgentUserConvertsExistingRequester() {
+
+    FreshAgentProvisionerTestUtils.setupFreshAgentExternalSystem();
+
+    // seed a requester (not an agent)
+    Long requesterId = seedRequester("requester@test.edu", "Reqonly", "Person");
+
+    // confirm there is NO agent with this email yet
+    FreshAgentUser noAgentYet = FreshAgentApiCommands.retrieveAgentUserByEmail("freshServiceDev", "requester@test.edu", true);
+    assertNull(noAgentYet);
+
+    // confirm the requester is visible via the requester lookup
+    Long foundRequesterId = FreshAgentApiCommands.retrieveRequesterIdByEmail("freshServiceDev", "requester@test.edu");
+    assertEquals(requesterId, foundRequesterId);
+
+    // createAgentUser should convert the requester, not POST a new agent
+    FreshAgentUser incoming = new FreshAgentUser();
+    incoming.setFirstName("Converted");
+    incoming.setLastName("Person");
+    incoming.setEmail("requester@test.edu");
+    incoming.setRolesJson(rolesJsonForRole(31000666666L));
+
+    FreshAgentUser result = FreshAgentApiCommands.createAgentUser("freshServiceDev", incoming);
+
+    assertNotNull(result);
+    // the converted agent reuses the requester's id (no new record created)
+    assertEquals(requesterId, result.getId());
+
+    // it is now retrievable as an AGENT
+    FreshAgentUser asAgent = FreshAgentApiCommands.retrieveAgentUserById("freshServiceDev", requesterId, false);
+    assertNotNull(asAgent);
+    assertEquals(Boolean.TRUE, asAgent.getActive());
+    // writable fields were applied after conversion
+    assertEquals("Converted", asAgent.getFirstName());
+    assertEquals("requester@test.edu", asAgent.getEmail());
+    assertTrue(asAgent.hasRoles());
+
+    // the row is gone from the requester table (converted, not duplicated)
+    Integer requesterRowCount = new GcDbAccess().connectionName("grouper")
+        .sql("select count(1) from mock_freshagent_requester where email = ?")
+        .addBindVar("requester@test.edu").select(int.class);
+    assertEquals(new Integer(0), requesterRowCount);
+
+    // exactly one agent row carries this email
+    Integer agentRowCount = new GcDbAccess().connectionName("grouper")
+        .sql("select count(1) from mock_freshagent_user where email = ?")
+        .addBindVar("requester@test.edu").select(int.class);
+    assertEquals(new Integer(1), agentRowCount);
+  }
+
+  /**
+   * The convert branch should preserve the whitelisted writable fields the
+   * incoming agent carries (e.g. job_title and custom fields), applying them via
+   * the follow-up update after conversion.
+   */
+  public void testCreateAgentUserConvertsRequesterAppliesWritableFields() {
+
+    FreshAgentProvisionerTestUtils.setupFreshAgentExternalSystem();
+
+    Long requesterId = seedRequester("fieldcarry@test.edu", "Field", "Carry");
+
+    FreshAgentUser incoming = new FreshAgentUser();
+    incoming.setFirstName("Field");
+    incoming.setLastName("Carry");
+    incoming.setEmail("fieldcarry@test.edu");
+    incoming.setJobTitle("Service Desk Analyst");
+    incoming.setRolesJson(rolesJsonForRole(31000777777L));
+    Map<String, Object> customFields = new HashMap<String, Object>();
+    customFields.put("pennkey", "fcarry");
+    incoming.setCustomFields(customFields);
+
+    FreshAgentUser result = FreshAgentApiCommands.createAgentUser("freshServiceDev", incoming);
+    assertNotNull(result);
+    assertEquals(requesterId, result.getId());
+
+    FreshAgentUser retrieved = FreshAgentApiCommands.retrieveAgentUserById("freshServiceDev", requesterId, false);
+    assertNotNull(retrieved);
+    assertEquals("Service Desk Analyst", retrieved.getJobTitle());
+    assertNotNull(retrieved.getCustomFields());
+    assertEquals("fcarry", retrieved.getCustomFields().get("pennkey"));
+  }
+
+  /**
+   * An existing ACTIVE agent takes precedence over any requester lookup: when an
+   * agent already holds the email, createAgentUser updates that agent and never
+   * touches the convert path. (In real Freshservice this dual state should not
+   * occur since email is unique account-wide; this test just pins down that the
+   * lookup order in createAgentUser checks agents before requesters.)
+   */
+  public void testCreateAgentUserPrefersExistingAgentOverRequester() {
+
+    FreshAgentProvisionerTestUtils.setupFreshAgentExternalSystem();
+
+    FreshAgentUser agent = new FreshAgentUser();
+    agent.setFirstName("Iam");
+    agent.setLastName("Agent");
+    agent.setEmail("dual@test.edu");
+    agent.setActive(true);
+    FreshAgentUser seededAgent = seedAgent(agent);
+
+    FreshAgentUser incoming = new FreshAgentUser();
+    incoming.setFirstName("Updated");
+    incoming.setLastName("Agent");
+    incoming.setEmail("dual@test.edu");
+    incoming.setRolesJson(rolesJsonForRole(31000888888L));
+
+    FreshAgentUser result = FreshAgentApiCommands.createAgentUser("freshServiceDev", incoming);
+
+    assertNotNull(result);
+    assertEquals(seededAgent.getId(), result.getId());
+
+    FreshAgentUser retrieved = FreshAgentApiCommands.retrieveAgentUserById("freshServiceDev", seededAgent.getId(), false);
+    assertNotNull(retrieved);
+    assertEquals("Updated", retrieved.getFirstName());
+  }
+
+  /**
+   * When neither an agent nor a requester holds the email, createAgentUser still
+   * falls through to a brand new POST (unchanged create-new behavior).
+   */
+  public void testCreateAgentUserNoAgentNoRequesterCreatesNew() {
+
+    FreshAgentProvisionerTestUtils.setupFreshAgentExternalSystem();
+
+    FreshAgentUser incoming = new FreshAgentUser();
+    incoming.setFirstName("Brand");
+    incoming.setLastName("New");
+    incoming.setEmail("brandnew@test.edu");
+    incoming.setRolesJson(rolesJsonForRole(31000999999L));
+
+    FreshAgentUser result = FreshAgentApiCommands.createAgentUser("freshServiceDev", incoming);
+
+    assertNotNull(result);
+    assertTrue(result.getId() > 0);
+    assertEquals("brandnew@test.edu", result.getEmail());
+
+    // nothing was ever in the requester table
+    Integer requesterRowCount = new GcDbAccess().connectionName("grouper")
+        .sql("select count(1) from mock_freshagent_requester where email = ?")
+        .addBindVar("brandnew@test.edu").select(int.class);
+    assertEquals(new Integer(0), requesterRowCount);
+  }
+
+  /**
+   * Direct test of convertRequesterToAgent: a seeded requester is converted and
+   * the returned agent carries the same id and is active.
+   */
+  public void testConvertRequesterToAgent() {
+
+    FreshAgentProvisionerTestUtils.setupFreshAgentExternalSystem();
+
+    Long requesterId = seedRequester("straightconvert@test.edu", "Straight", "Convert");
+
+    FreshAgentUser converted = FreshAgentApiCommands.convertRequesterToAgent("freshServiceDev", requesterId);
+
+    assertNotNull(converted);
+    assertEquals(requesterId, converted.getId());
+    assertEquals(Boolean.TRUE, converted.getActive());
+
+    // now retrievable as an agent via the commands class
+    FreshAgentUser asAgent = FreshAgentApiCommands.retrieveAgentUserById("freshServiceDev", requesterId, false);
+    assertNotNull(asAgent);
+    assertEquals(Boolean.TRUE, asAgent.getActive());
+    assertEquals("straightconvert@test.edu", asAgent.getEmail());
+  }
+
+  /**
+   * Converting a requester id that does not exist should fail rather than
+   * silently succeed.
+   */
+  public void testConvertRequesterToAgentNotFound() {
+
+    FreshAgentProvisionerTestUtils.setupFreshAgentExternalSystem();
+
+    try {
+      FreshAgentApiCommands.convertRequesterToAgent("freshServiceDev", 987654321L);
+      fail("Should have thrown for a non-existent requester id");
+    } catch (RuntimeException e) {
+      assertTrue("expected a 404-related failure but was: " + e.getMessage(),
+          e.getMessage().contains("404"));
+    }
+  }
+
+  /**
+   * retrieveRequesterIdByEmail returns the requester id when a requester holds
+   * the email, and null when none does.
+   */
+  public void testRetrieveRequesterIdByEmail() {
+
+    FreshAgentProvisionerTestUtils.setupFreshAgentExternalSystem();
+
+    Long requesterId = seedRequester("lookupme@test.edu", "Lookup", "Me");
+
+    Long foundId = FreshAgentApiCommands.retrieveRequesterIdByEmail("freshServiceDev", "lookupme@test.edu");
+    assertNotNull(foundId);
+    assertEquals(requesterId, foundId);
+
+    Long notFound = FreshAgentApiCommands.retrieveRequesterIdByEmail("freshServiceDev", "nobody@test.edu");
+    assertNull(notFound);
+  }
+
+  /**
+   * Seed a requester directly into the mock_freshagent_requester table,
+   * bypassing the Freshservice API. This table is separate from
+   * mock_freshagent_user, mirroring Freshservice's actual separation between
+   * the agent and requester namespaces.
+   *
+   * @param email the requester's email
+   * @param firstName the requester's first name
+   * @param lastName the requester's last name
+   * @return the generated requester id
+   */
+  private Long seedRequester(String email, String firstName, String lastName) {
+    Long id = java.util.concurrent.ThreadLocalRandom.current().nextLong(1, 99999999L);
+
+    new GcDbAccess().connectionName("grouper")
+        .sql("insert into mock_freshagent_requester (id, email, first_name, last_name, active) values (?, ?, ?, ?, ?)")
+        .addBindVar(id)
+        .addBindVar(email)
+        .addBindVar(firstName)
+        .addBindVar(lastName)
+        .addBindVar("T")
+        .executeSql();
+
+    return id;
+  }
+
+}
