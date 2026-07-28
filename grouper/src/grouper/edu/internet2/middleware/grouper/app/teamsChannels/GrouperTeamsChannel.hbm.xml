@@ -20,7 +20,7 @@
     PUBLIC "-//Hibernate/Hibernate Mapping DTD//EN"
     "http://www.hibernate.org/dtd/hibernate-mapping-3.0.dtd">
 
-<hibernate-mapping package="edu.internet2.middleware.grouper.app.teamsChannel" default-lazy="false">
+<hibernate-mapping package="edu.internet2.middleware.grouper.app.teamsChannels" default-lazy="false">
   <class name="GrouperTeamsChannel" table="mock_teams_channel">
 
     <meta attribute="implement-equals">true</meta>
