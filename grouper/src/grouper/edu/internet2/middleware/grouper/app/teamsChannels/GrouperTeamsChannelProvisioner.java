@@ -14,7 +14,9 @@ import edu.internet2.middleware.grouper.app.provisioning.targetDao.GrouperProvis
  *
  * Scope: channel create/update/delete and channel membership add/remove.
  * Entity (user) create/update/delete is intentionally NOT supported by this
- * provisioner - it operates on existing Entra users only.
+ * provisioner - it operates on existing Entra users only.  Entities ARE
+ * resolvable (read-only) so memberships, which are keyed by the Entra user id,
+ * can be matched.
  *
  * Modeled on GrouperAzureProvisioner.
  */

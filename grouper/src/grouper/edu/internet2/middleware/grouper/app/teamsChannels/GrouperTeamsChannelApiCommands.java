@@ -2,6 +2,7 @@ package edu.internet2.middleware.grouper.app.teamsChannels;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +48,14 @@ import edu.internet2.middleware.grouperClient.util.GrouperClientUtils;
  * team-scoped, which does not batch as cleanly.
  */
 public class GrouperTeamsChannelApiCommands {
+  
+  public static void main(String[] args) {
+    
+//    String configId = "entraId";
+//    
+//    System.exit(0);
+  }
+  
 
   /** logger */
   private static final Log LOG = GrouperUtil.getLog(GrouperTeamsChannelApiCommands.class);
@@ -167,6 +176,7 @@ public class GrouperTeamsChannelApiCommands {
    * @param extensionAttributes extra $select attributes
    * @return the channels
    */
+  //Tested
   public static List<GrouperTeamsChannel> retrieveTeamsChannels(String configId, Set<String> teamIds,
       Set<String> extensionAttributes) {
 
@@ -238,6 +248,7 @@ public class GrouperTeamsChannelApiCommands {
    * @param extensionAttributes
    * @return the channels found
    */
+  //Tested
   public static List<GrouperTeamsChannel> retrieveTeamsChannelsByIds(String configId,
       List<MultiKey> teamIdChannelIds, Set<String> extensionAttributes) {
 
@@ -299,6 +310,7 @@ public class GrouperTeamsChannelApiCommands {
    * @param displayName
    * @return the channel or null
    */
+  //Tested
   public static GrouperTeamsChannel retrieveTeamsChannelByDisplayName(String configId, String teamId, String displayName) {
 
     Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
@@ -553,7 +565,7 @@ public class GrouperTeamsChannelApiCommands {
     try {
       int pagingSize = GrouperLoaderConfig.retrieveConfig().propertyValueInt("teamsGetMembershipPagingSize", 999);
       String urlSuffix = "/teams/" + GrouperUtil.escapeUrlEncode(teamId) + "/channels/"
-          + GrouperUtil.escapeUrlEncode(channelId) + "/members?$select=id,userId&$top=" + pagingSize;
+          + GrouperUtil.escapeUrlEncode(channelId) + "/members?$top=" + pagingSize;
 
       String resourceEndpoint = GrouperLoaderConfig.retrieveConfig()
           .propertyValueStringRequired("grouper.azureConnector." + configId + ".resourceEndpoint");
@@ -753,6 +765,227 @@ public class GrouperTeamsChannelApiCommands {
     if (returnCode[0] == 429) {
       throttleSleep(debugMap, DEFAULT_THROTTLE_SECONDS);
       deleteTeamsChannelMembership(configId, debugMap, teamId, channelId, membershipId);
+    }
+  }
+
+  // ==================================================================
+  // entity (user) retrieve - READ ONLY
+  //
+  // This provisioner does not create/update/delete Entra users.  It only
+  // resolves them, because a channel membership is keyed by the Entra user id
+  // (GUID) while Grouper subjects typically carry a netid / UPN.
+  // ==================================================================
+
+  /**
+   * retrieve all Entra users.  Only used when the provisioner is configured to
+   * cache the full entity list; prefer the targeted lookup below.
+   *
+   * @param configId
+   * @return the users
+   */
+  public static List<GrouperTeamsChannelUser> retrieveTeamsChannelUsers(String configId) {
+
+    Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
+    debugMap.put("method", "retrieveTeamsChannelUsers");
+    long startTime = System.nanoTime();
+
+    List<GrouperTeamsChannelUser> results = new ArrayList<GrouperTeamsChannelUser>();
+
+    try {
+      int pagingSize = GrouperLoaderConfig.retrieveConfig().propertyValueInt("teamsGetUserPagingSize", 999);
+      String urlSuffix = "/users?$top=" + pagingSize + "&$select=" + GrouperTeamsChannelUser.fieldsToSelect;
+
+      String resourceEndpoint = GrouperLoaderConfig.retrieveConfig()
+          .propertyValueStringRequired("grouper.azureConnector." + configId + ".resourceEndpoint");
+
+      for (int i = 0; i < 1000000; i++) {
+
+        int[] returnCode = new int[] { -1 };
+        JsonNode jsonNode = executeGetMethod(debugMap, debugLabel(debugMap, "retrieveTeamsChannelUsers"), configId, urlSuffix, returnCode);
+
+        if (returnCode[0] == 429) {
+          throttleSleep(debugMap, DEFAULT_THROTTLE_SECONDS);
+          continue;
+        }
+
+        if (returnCode[0] == 404 || jsonNode == null) {
+          break;
+        }
+
+        ArrayNode value = (ArrayNode) GrouperUtil.jsonJacksonGetNode(jsonNode, "value");
+        for (int k = 0; k < (value == null ? 0 : value.size()); k++) {
+          GrouperTeamsChannelUser user = GrouperTeamsChannelUser.fromJson(value.get(k));
+          if (user != null) {
+            results.add(user);
+          }
+        }
+
+        String nextLink = GrouperUtil.jsonJacksonGetString(jsonNode, "@odata.nextLink");
+        if (StringUtils.isBlank(nextLink)) {
+          break;
+        }
+        if (nextLink.startsWith(resourceEndpoint)) {
+          urlSuffix = nextLink.substring(resourceEndpoint.length());
+        } else {
+          urlSuffix = nextLink;
+        }
+      }
+
+      debugMap.put("size", GrouperClientUtils.length(results));
+      return results;
+    } catch (RuntimeException re) {
+      debugMap.put("exception", GrouperClientUtils.getFullStackTrace(re));
+      throw re;
+    } finally {
+      GrouperTeamsChannelLog.teamsLog(debugMap, startTime);
+    }
+  }
+
+  /**
+   * resolve specific Entra users by a field value.
+   *
+   * When fieldName is "id" or "userPrincipalName" the user can be addressed
+   * directly (/users/{value}); any other field requires an $filter query.
+   * Requests are sent in Graph $batch chunks of 20 (the Graph batch limit).
+   *
+   * @param configId
+   * @param fieldValues the values to look up
+   * @param fieldName the attribute the values correspond to
+   * @return the users that were found (missing users are simply absent)
+   */
+  public static List<GrouperTeamsChannelUser> retrieveTeamsChannelUsers(String configId,
+      List<String> fieldValues, String fieldName) {
+
+    Map<String, Object> debugMap = new LinkedHashMap<String, Object>();
+    debugMap.put("method", "retrieveTeamsChannelUsers");
+    debugMap.put("fieldName", fieldName);
+    long startTime = System.nanoTime();
+
+    List<GrouperTeamsChannelUser> result = new ArrayList<GrouperTeamsChannelUser>();
+
+    try {
+      List<String> nonBlankFieldValues = new ArrayList<String>();
+      for (String fieldValue : GrouperUtil.nonNull(fieldValues)) {
+        if (StringUtils.isNotBlank(fieldValue)) {
+          nonBlankFieldValues.add(fieldValue);
+        }
+      }
+
+      if (nonBlankFieldValues.size() == 0) {
+        return result;
+      }
+
+      int numberOfHttpRequests = GrouperUtil.batchNumberOfBatches(nonBlankFieldValues, 20, false);
+      debugMap.put("numberOfHttpRequests", numberOfHttpRequests);
+
+      for (int httpRequestIndex = 0; httpRequestIndex < numberOfHttpRequests; httpRequestIndex++) {
+        List<String> fieldValuesInOneHttpRequest = GrouperUtil.batchList(nonBlankFieldValues, 20, httpRequestIndex);
+        retrieveUsersHelper(configId, debugMap, fieldName, fieldValuesInOneHttpRequest, result);
+      }
+
+      debugMap.put("size", GrouperClientUtils.length(result));
+      return result;
+    } catch (RuntimeException re) {
+      debugMap.put("exception", GrouperClientUtils.getFullStackTrace(re));
+      throw re;
+    } finally {
+      GrouperTeamsChannelLog.teamsLog(debugMap, startTime);
+    }
+  }
+
+  /**
+   * send one Graph $batch request of up to 20 user lookups, retrying any
+   * throttled sub-requests.
+   */
+  private static void retrieveUsersHelper(String configId, Map<String, Object> debugMap,
+      String fieldName, List<String> fieldValuesInOneHttpRequest, List<GrouperTeamsChannelUser> result) {
+
+    List<String> throttledFieldValues = new ArrayList<String>();
+    int secondsToSleep = -1;
+
+    ObjectNode mainRequestsNode = GrouperUtil.jsonJacksonNode();
+    ArrayNode requestsArrayNode = GrouperUtil.jsonJacksonArrayNode();
+    mainRequestsNode.set("requests", requestsArrayNode);
+
+    int index = 0;
+    for (String fieldValue : fieldValuesInOneHttpRequest) {
+
+      ObjectNode innerRequestNode = GrouperUtil.jsonJacksonNode();
+      innerRequestNode.put("id", String.valueOf(index));
+
+      String urlSuffix = null;
+      if (StringUtils.equalsAny(fieldName, "id", "userPrincipalName")) {
+        urlSuffix = "/users/" + GrouperUtil.escapeUrlEncode(fieldValue)
+            + "?$select=" + GrouperTeamsChannelUser.fieldsToSelect;
+      } else {
+        urlSuffix = "/users?$filter=" + GrouperUtil.escapeUrlEncode(fieldName)
+            + "%20eq%20'" + GrouperUtil.escapeUrlEncode(StringUtils.replace(fieldValue, "'", "''")) + "'&$select="
+            + GrouperTeamsChannelUser.fieldsToSelect;
+      }
+
+      innerRequestNode.put("url", urlSuffix);
+      innerRequestNode.put("method", "GET");
+
+      requestsArrayNode.add(innerRequestNode);
+      index++;
+    }
+
+    String jsonStringToSend = GrouperUtil.jsonJacksonToString(mainRequestsNode);
+    JsonNode mainResponseNode = executeMethod(debugMap, debugLabel(debugMap, "retrieveTeamsChannelUsers"),
+        "POST", configId, "/$batch/", GrouperUtil.toSet(200), new int[] { -1 }, jsonStringToSend);
+
+    if (mainResponseNode != null) {
+      ArrayNode responses = (ArrayNode) GrouperUtil.jsonJacksonGetNode(mainResponseNode, "responses");
+
+      for (int i = 0; i < (responses == null ? 0 : responses.size()); i++) {
+        JsonNode oneResponse = responses.get(i);
+        Integer statusCode = GrouperUtil.jsonJacksonGetInteger(oneResponse, "status");
+        String id = GrouperUtil.jsonJacksonGetString(oneResponse, "id");
+        JsonNode bodyNode = GrouperUtil.jsonJacksonGetNode(oneResponse, "body");
+
+        String fieldValue = fieldValuesInOneHttpRequest.get(GrouperUtil.intValue(id));
+
+        if (statusCode != null && statusCode == 429) {
+          throttledFieldValues.add(fieldValue);
+          continue;
+        }
+
+        // 404 means the user simply is not in the directory - not an error
+        if (statusCode == null || (statusCode != 200 && statusCode != 404)) {
+          LOG.error("Error retrieving user for field name: " + fieldName + " and fieldValue: '"
+              + fieldValue + "', status: " + statusCode + ", body: " + bodyNode);
+          continue;
+        }
+
+        if (statusCode == 404) {
+          continue;
+        }
+
+        ArrayNode value = (ArrayNode) GrouperUtil.jsonJacksonGetNode(bodyNode, "value");
+
+        if (value != null && value.size() > 0) {
+          if (value.size() > 1) {
+            LOG.error("Query returned multiple results for field name: " + fieldName
+                + " and fieldValue: '" + fieldValue + "'");
+          }
+          for (int j = 0; j < value.size(); j++) {
+            GrouperTeamsChannelUser user = GrouperTeamsChannelUser.fromJson(value.get(j));
+            if (user != null) {
+              result.add(user);
+            }
+          }
+        } else {
+          GrouperTeamsChannelUser user = GrouperTeamsChannelUser.fromJson(bodyNode);
+          if (user != null) {
+            result.add(user);
+          }
+        }
+      }
+    }
+
+    if (throttledFieldValues.size() > 0) {
+      throttleSleep(debugMap, secondsToSleep);
+      retrieveUsersHelper(configId, debugMap, fieldName, throttledFieldValues, result);
     }
   }
 

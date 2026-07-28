@@ -11,6 +11,7 @@ import java.util.Set;
 import org.apache.commons.lang3.StringUtils;
 
 import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningConfigurationAttribute;
+import edu.internet2.middleware.grouper.app.provisioning.ProvisioningEntity;
 import edu.internet2.middleware.grouper.app.provisioning.ProvisioningGroup;
 import edu.internet2.middleware.grouper.app.provisioning.ProvisioningMembership;
 import edu.internet2.middleware.grouper.app.provisioning.ProvisioningObjectChange;
@@ -25,8 +26,12 @@ import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoInse
 import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoInsertGroupsResponse;
 import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoInsertMembershipsRequest;
 import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoInsertMembershipsResponse;
+import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoRetrieveAllEntitiesRequest;
+import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoRetrieveAllEntitiesResponse;
 import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoRetrieveAllGroupsRequest;
 import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoRetrieveAllGroupsResponse;
+import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoRetrieveEntitiesRequest;
+import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoRetrieveEntitiesResponse;
 import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoRetrieveGroupsRequest;
 import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoRetrieveGroupsResponse;
 import edu.internet2.middleware.grouper.app.provisioning.targetDao.TargetDaoRetrieveMembershipsByGroupRequest;
@@ -43,8 +48,12 @@ import edu.internet2.middleware.grouperClient.util.ExpirableCache;
 /**
  * DAO that adapts the Grouper provisioning framework to the Teams channel Graph
  * API.  Supports channel retrieve/insert/update/delete and membership
- * retrieve/insert/delete.  Entity (user) operations are intentionally not
- * implemented - this provisioner operates on existing Entra users only.
+ * retrieve/insert/delete, plus read-only entity (user) resolution.
+ *
+ * Entity insert/update/delete is intentionally not implemented - this
+ * provisioner operates on existing Entra users only.  Entities are readable
+ * because channel memberships are keyed by the Entra user id (GUID), so the
+ * framework must be able to resolve a Grouper subject to that id.
  *
  * Modeled on GrouperAzureTargetDao.
  */
@@ -297,6 +306,98 @@ public class GrouperTeamsChannelTargetDao extends GrouperProvisionerTargetDaoBas
       throw new RuntimeException("Failed to delete Teams channels", e);
     } finally {
       this.addTargetDaoTimingInfo(new TargetDaoTimingInfo("deleteGroups", startNanos));
+    }
+  }
+
+  // ==================================================================
+  // entity (user) retrieve - READ ONLY
+  //
+  // Entities are resolved, never written.  A Teams channel membership is keyed
+  // by the Entra user id (GUID), but Grouper subjects normally carry a netid /
+  // UPN, so the framework needs to be able to look a user up in order to match
+  // and provision memberships.  Insert/update/delete of entities remain
+  // unimplemented on purpose.
+  // ==================================================================
+
+  @Override
+  public TargetDaoRetrieveAllEntitiesResponse retrieveAllEntities(
+      TargetDaoRetrieveAllEntitiesRequest targetDaoRetrieveAllEntitiesRequest) {
+
+    long startNanos = System.nanoTime();
+
+    try {
+      List<ProvisioningEntity> results = new ArrayList<ProvisioningEntity>();
+      Map<ProvisioningEntity, Object> targetEntityToNativeEntity = new HashMap<ProvisioningEntity, Object>();
+
+      List<GrouperTeamsChannelUser> users = GrouperTeamsChannelApiCommands.retrieveTeamsChannelUsers(
+          config().getTeamsExternalSystemConfigId());
+
+      for (GrouperTeamsChannelUser user : GrouperUtil.nonNull(users)) {
+        ProvisioningEntity targetEntity = user.toProvisioningEntity();
+        results.add(targetEntity);
+        targetEntityToNativeEntity.put(targetEntity, user);
+      }
+
+      TargetDaoRetrieveAllEntitiesResponse response = new TargetDaoRetrieveAllEntitiesResponse(results);
+
+      if (targetDaoRetrieveAllEntitiesRequest != null && targetDaoRetrieveAllEntitiesRequest.isIncludeNativeEntity()) {
+        response.setTargetEntityToTargetNativeEntity(targetEntityToNativeEntity);
+      }
+
+      return response;
+    } finally {
+      this.addTargetDaoTimingInfo(new TargetDaoTimingInfo("retrieveAllEntities", startNanos));
+    }
+  }
+
+  @Override
+  public TargetDaoRetrieveEntitiesResponse retrieveEntities(TargetDaoRetrieveEntitiesRequest targetDaoRetrieveEntitiesRequest) {
+
+    long startNanos = System.nanoTime();
+
+    try {
+      List<ProvisioningEntity> targetEntities = targetDaoRetrieveEntitiesRequest.getTargetEntities();
+      String searchAttribute = targetDaoRetrieveEntitiesRequest.getSearchAttribute();
+
+      List<String> fieldValues = new ArrayList<String>();
+      for (ProvisioningEntity targetEntity : GrouperUtil.nonNull(targetEntities)) {
+        String attributeValue = null;
+        if (StringUtils.equals(searchAttribute, "id")) {
+          // the entity id may be carried on the object itself rather than as an attribute
+          attributeValue = targetEntity.getId();
+        }
+        if (StringUtils.isBlank(attributeValue)) {
+          attributeValue = targetEntity.retrieveAttributeValueString(searchAttribute);
+        }
+        if (StringUtils.isNotBlank(attributeValue)) {
+          fieldValues.add(attributeValue);
+        }
+      }
+
+      List<ProvisioningEntity> targetEntitiesFromTeams = new ArrayList<ProvisioningEntity>();
+      Map<ProvisioningEntity, Object> targetEntityToNativeEntity = new HashMap<ProvisioningEntity, Object>();
+
+      if (fieldValues.size() > 0) {
+        List<GrouperTeamsChannelUser> users = GrouperTeamsChannelApiCommands.retrieveTeamsChannelUsers(
+            config().getTeamsExternalSystemConfigId(), fieldValues, searchAttribute);
+
+        for (GrouperTeamsChannelUser user : GrouperUtil.nonNull(users)) {
+          ProvisioningEntity targetEntity = user.toProvisioningEntity();
+          targetEntitiesFromTeams.add(targetEntity);
+          targetEntityToNativeEntity.put(targetEntity, user);
+        }
+      }
+
+      TargetDaoRetrieveEntitiesResponse response = new TargetDaoRetrieveEntitiesResponse();
+      response.setTargetEntities(targetEntitiesFromTeams);
+
+      if (targetDaoRetrieveEntitiesRequest.isIncludeNativeEntity()) {
+        response.setTargetEntityToTargetNativeEntity(targetEntityToNativeEntity);
+      }
+
+      return response;
+    } finally {
+      this.addTargetDaoTimingInfo(new TargetDaoTimingInfo("retrieveEntities", startNanos));
     }
   }
 
@@ -591,7 +692,11 @@ public class GrouperTeamsChannelTargetDao extends GrouperProvisionerTargetDaoBas
     grouperProvisionerDaoCapabilities.setCanDeleteMemberships(true);
     grouperProvisionerDaoCapabilities.setCanRetrieveMembershipsAllByGroup(true);
 
-    // entities are intentionally NOT supported by this provisioner
+    // entities - RESOLVE ONLY.  Memberships are keyed by the Entra user id, so
+    // the framework must be able to look users up.  Insert/update/delete of
+    // entities remain unsupported on purpose.
+    grouperProvisionerDaoCapabilities.setCanRetrieveEntities(true);
+    grouperProvisionerDaoCapabilities.setCanRetrieveAllEntities(true);
   }
 
 }
