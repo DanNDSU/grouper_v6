@@ -96,6 +96,8 @@ import edu.internet2.middleware.grouper.app.teamDynamix.TeamDynamixAuth;
 import edu.internet2.middleware.grouper.app.teamDynamix.TeamDynamixGroup;
 import edu.internet2.middleware.grouper.app.teamDynamix.TeamDynamixMembership;
 import edu.internet2.middleware.grouper.app.teamDynamix.TeamDynamixUser;
+import edu.internet2.middleware.grouper.app.teamsChannels.GrouperTeamsChannel;
+import edu.internet2.middleware.grouper.app.teamsChannels.GrouperTeamsChannelMembership;
 import edu.internet2.middleware.grouper.cfg.GrouperConfig;
 import edu.internet2.middleware.grouper.cfg.GrouperHibernateConfig;
 import edu.internet2.middleware.grouper.ddl.GrouperDdlUtils;
@@ -315,7 +317,10 @@ public abstract class Hib3DAO {
         addClass(configuration, DatadogGroup.class);
         addClass(configuration, DatadogUser.class);
         addClass(configuration, DatadogMembership.class);
-
+        
+        addClass(configuration, GrouperTeamsChannel.class);
+        addClass(configuration, GrouperTeamsChannelMembership.class);
+        
       }
       addClass(configuration, Hib3MemberDAO.class);
       addClass(configuration, Hib3MembershipDAO.class);
