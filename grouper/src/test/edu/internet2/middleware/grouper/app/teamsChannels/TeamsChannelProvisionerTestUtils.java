@@ -194,6 +194,13 @@ public class TeamsChannelProvisionerTestUtils {
     configureProvisionerSuffix(input, "groupAttributeValueCache1source", "target");
     configureProvisionerSuffix(input, "groupAttributeValueCache1type", "groupAttribute");
     configureProvisionerSuffix(input, "groupAttributeValueCache1groupAttribute", "displayName");
+    // cache the parent teamId on gc_grouper_sync_group.  Channel operations are all
+    // team-scoped, so the teamId has to survive the Grouper group going away - once
+    // it does there is no grouper-side group left to translate it from.
+    configureProvisionerSuffix(input, "groupAttributeValueCache2has", "true");
+    configureProvisionerSuffix(input, "groupAttributeValueCache2source", "target");
+    configureProvisionerSuffix(input, "groupAttributeValueCache2type", "groupAttribute");
+    configureProvisionerSuffix(input, "groupAttributeValueCache2groupAttribute", "teamId");
 
     // ---------------------------------------------------------------
     // entities (Entra users) - resolved, never managed

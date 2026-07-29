@@ -11,8 +11,10 @@ import java.util.Set;
 import org.apache.commons.lang3.StringUtils;
 
 import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningConfigurationAttribute;
+import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningConfigurationAttributeDbCache;
 import edu.internet2.middleware.grouper.app.provisioning.ProvisioningEntity;
 import edu.internet2.middleware.grouper.app.provisioning.ProvisioningGroup;
+import edu.internet2.middleware.grouper.app.provisioning.ProvisioningGroupWrapper;
 import edu.internet2.middleware.grouper.app.provisioning.ProvisioningMembership;
 import edu.internet2.middleware.grouper.app.provisioning.ProvisioningObjectChange;
 import edu.internet2.middleware.grouper.app.provisioning.ProvisioningObjectChangeAction;
@@ -43,6 +45,7 @@ import edu.internet2.middleware.grouper.util.GrouperHttpClient;
 import edu.internet2.middleware.grouper.util.GrouperHttpClientLog;
 import edu.internet2.middleware.grouper.util.GrouperUtil;
 import edu.internet2.middleware.grouperClient.collections.MultiKey;
+import edu.internet2.middleware.grouperClient.jdbc.tableSync.GcGrouperSyncGroup;
 import edu.internet2.middleware.grouperClient.util.ExpirableCache;
 
 /**
@@ -609,38 +612,136 @@ public class GrouperTeamsChannelTargetDao extends GrouperProvisionerTargetDaoBas
   }
 
   /**
-   * find the teamId that owns a given target channel id by consulting the
-   * translated grouper-target provisioning groups (which carry the teamId).
+   * find the teamId that owns a given target channel id.
    */
   private String resolveTeamIdForGroupId(String channelId) {
-    for (ProvisioningGroup grouperTargetGroup : grouperTargetGroups()) {
-      if (StringUtils.equals(grouperTargetGroup.getId(), channelId)) {
-        return grouperTargetGroup.retrieveAttributeValueString("teamId");
-      }
+    if (StringUtils.isBlank(channelId)) {
+      return null;
     }
-    return null;
+    return channelIdToTeamId().get(channelId);
   }
 
   /**
-   * the set of parent team ids referenced by the grouper-target groups.
+   * the set of parent team ids referenced by this provisioning run.
    */
   private Set<String> teamIdsFromProvisioningData() {
-    Set<String> teamIds = new HashSet<String>();
-    for (ProvisioningGroup grouperTargetGroup : grouperTargetGroups()) {
-      String teamId = grouperTargetGroup.retrieveAttributeValueString("teamId");
-      if (StringUtils.isNotBlank(teamId)) {
-        teamIds.add(teamId);
-      }
-    }
-    return teamIds;
+    return new HashSet<String>(channelIdToTeamId().values());
   }
 
   /**
-   * the translated grouper-side target groups for this provisioning run.
+   * map of target channel id to the parent team id that owns it, assembled from
+   * every place the teamId can live during a run.  Each of the three sources
+   * covers a case the others do not:
+   *
+   * 1. the translated grouper-side target group - carries the teamId translation
+   *    (or the value the translator copied off md_grouper_teamId).  This is the
+   *    normal source, and the ONLY source on an incremental membership change,
+   *    where the framework never retrieves the channel from the target.
+   * 2. the group retrieved from the target - the only source once the Grouper
+   *    group is unprovisionable, since there is no grouper-side group to
+   *    translate.
+   * 3. the gc_grouper_sync_group attribute value cache - the only source once
+   *    the Grouper group is deleted outright, since there is then neither a
+   *    grouper-side group nor (on an incremental run) a retrieved one.  Requires
+   *    a groupAttributeValueCache slot configured for teamId with source
+   *    'target'; without one this simply contributes nothing.
    */
-  private List<ProvisioningGroup> grouperTargetGroups() {
-    return GrouperUtil.nonNull(
-        this.getGrouperProvisioner().retrieveGrouperProvisioningData().retrieveTargetProvisioningGroups());
+  private Map<String, String> channelIdToTeamId() {
+
+    Map<String, String> channelIdToTeamId = new LinkedHashMap<String, String>();
+
+    for (ProvisioningGroupWrapper provisioningGroupWrapper :
+        GrouperUtil.nonNull(this.getGrouperProvisioner().retrieveGrouperProvisioningData().getProvisioningGroupWrappers())) {
+
+      if (provisioningGroupWrapper == null) {
+        continue;
+      }
+
+      String channelId = null;
+      String teamId = null;
+
+      for (ProvisioningGroup provisioningGroup : new ProvisioningGroup[] {
+          provisioningGroupWrapper.getGrouperTargetGroup(),
+          provisioningGroupWrapper.getTargetProvisioningGroup() }) {
+
+        if (provisioningGroup == null) {
+          continue;
+        }
+        if (StringUtils.isBlank(channelId)) {
+          channelId = provisioningGroup.retrieveAttributeValueString("id");
+        }
+        if (StringUtils.isBlank(teamId)) {
+          teamId = provisioningGroup.retrieveAttributeValueString("teamId");
+        }
+      }
+
+      if (StringUtils.isBlank(channelId)) {
+        channelId = cachedGroupAttributeValue(provisioningGroupWrapper, "id");
+      }
+      if (StringUtils.isBlank(teamId)) {
+        teamId = cachedGroupAttributeValue(provisioningGroupWrapper, "teamId");
+      }
+
+      if (StringUtils.isNotBlank(channelId) && StringUtils.isNotBlank(teamId)) {
+        channelIdToTeamId.put(channelId, teamId);
+      }
+    }
+
+    return channelIdToTeamId;
+  }
+
+  /**
+   * read a group attribute out of the gc_grouper_sync_group attribute value
+   * cache, if the deployment configured a cache slot for that attribute.
+   * Returns null when no slot is configured or the slot is empty.
+   */
+  private String cachedGroupAttributeValue(ProvisioningGroupWrapper provisioningGroupWrapper, String attributeName) {
+
+    if (provisioningGroupWrapper == null) {
+      return null;
+    }
+
+    GcGrouperSyncGroup gcGrouperSyncGroup = provisioningGroupWrapper.getGcGrouperSyncGroup();
+    if (gcGrouperSyncGroup == null) {
+      return null;
+    }
+
+    GrouperProvisioningConfigurationAttributeDbCache[] groupAttributeDbCaches = config().getGroupAttributeDbCaches();
+    if (groupAttributeDbCaches == null) {
+      return null;
+    }
+
+    for (GrouperProvisioningConfigurationAttributeDbCache groupAttributeDbCache : groupAttributeDbCaches) {
+
+      if (groupAttributeDbCache == null
+          || !StringUtils.equals(attributeName, groupAttributeDbCache.getAttributeName())) {
+        continue;
+      }
+
+      String value = null;
+      switch (groupAttributeDbCache.getIndex()) {
+        case 0:
+          value = gcGrouperSyncGroup.getGroupAttributeValueCache0();
+          break;
+        case 1:
+          value = gcGrouperSyncGroup.getGroupAttributeValueCache1();
+          break;
+        case 2:
+          value = gcGrouperSyncGroup.getGroupAttributeValueCache2();
+          break;
+        case 3:
+          value = gcGrouperSyncGroup.getGroupAttributeValueCache3();
+          break;
+        default:
+          break;
+      }
+
+      if (StringUtils.isNotBlank(value)) {
+        return value;
+      }
+    }
+
+    return null;
   }
 
   private void markProvisioned(List<ProvisioningGroup> targetGroups, boolean provisioned, Exception exception) {
