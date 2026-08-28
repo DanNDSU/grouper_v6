@@ -18,6 +18,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import edu.internet2.middleware.grouper.app.azure.AzureGrouperExternalSystem;
 import edu.internet2.middleware.grouper.app.loader.GrouperLoaderConfig;
 import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioner;
+import edu.internet2.middleware.grouper.misc.GrouperStartup;
 import edu.internet2.middleware.grouper.util.GrouperHttpClient;
 import edu.internet2.middleware.grouper.util.GrouperUtil;
 import edu.internet2.middleware.grouperClient.collections.MultiKey;
@@ -51,9 +52,11 @@ public class GrouperTeamsChannelApiCommands {
   
   public static void main(String[] args) {
     
-//    String configId = "entraId";
-//    
-//    System.exit(0);
+    String configId = "entraId";
+    
+    GrouperStartup.startup();
+    
+    System.exit(0);
   }
   
 
