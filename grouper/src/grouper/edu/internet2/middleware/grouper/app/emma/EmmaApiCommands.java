@@ -1,6 +1,7 @@
 package edu.internet2.middleware.grouper.app.emma;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -51,15 +52,8 @@ public class EmmaApiCommands {
     try {
       String configId = "emma";
       
-      EmmaGroup group = new EmmaGroup();
-      group.setName("Test API Group");      
+      System.out.println(configId + " done");
       
-      EmmaGroup createdGroup = createGroup(configId, group);
-      
-      System.out.println(createdGroup.getName() + " " + createdGroup.getId());
-
-      System.out.println("done " + configId);
-
     } catch (Exception e) {
       System.out.println("Error: " + GrouperClientUtils.getFullStackTrace(e));
     }
