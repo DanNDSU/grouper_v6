@@ -2,7 +2,6 @@ package edu.internet2.middleware.grouper.app.emma;
 
 import org.apache.commons.lang3.StringUtils;
 
-import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningFullSyncJob;
 import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningType;
 import edu.internet2.middleware.grouper.app.provisioning.ProvisioningConsumer;
 import edu.internet2.middleware.grouper.cfg.GrouperConfig;
@@ -11,45 +10,58 @@ import edu.internet2.middleware.grouper.changeLog.esb.consumer.EsbConsumer;
 import edu.internet2.middleware.grouperClient.config.ConfigPropertiesCascadeBase;
 
 /**
- * Builds an Emma provisioner configuration for tests, and points the
- * WsBearerToken external system it uses at the mock service.
+ * Builds an Emma provisioner configuration for tests and points the Emma external
+ * system at the mock service (EmmaMockServiceHandler).
  *
- * Modeled on DuoProvisionerTestUtils / FreshRequesterProvisionerTestUtils, since
- * Emma authenticates the same way as Freshservice: HTTP Basic auth through a
- * WsBearerToken external system.
+ * Modeled on TeamsChannelProvisionerTestUtils, but the Emma external system is a
+ * WsBearerToken basic-auth system (public API key as user, private API key as
+ * password) rather than an Azure connector, and Emma manages its own members, so
+ * entity CRUD is enabled and there is no directory to pre-seed.
  */
 public class EmmaProvisionerTestUtils {
 
   /**
-   * point a WsBearerToken external system at the mock Emma service.
+   * point the Emma external system at the mock service (or at real Emma).
    *
-   * Requires that grouper/conf/grouper.properties (local, not checked in) has:
-   *   grouperExtraMockServer.emma.class = edu.internet2.middleware.grouper.app.emma.EmmaMockServiceHandler
-   *   grouperExtraMockServer.emma.path  = emma
-   * so MockServiceServlet routes /grouper/mockServices/emma to EmmaMockServiceHandler.
+   * Emma authenticates with HTTP Basic auth via a WsBearerToken external system:
+   * the endpoint (which in production already includes the account id) plus
+   * basicAuthUser / basicAuthPassword.  The mock service validates those two
+   * credentials against grouper.wsBearerToken.&lt;id&gt;.basicAuth* in
+   * EmmaMockServiceHandler.checkAuthorization.
    *
    * @param emmaExternalSystemConfigId
+   * @param realEmma
    */
-  public static void setupEmmaExternalSystem(String emmaExternalSystemConfigId) {
-
-    int port = GrouperConfig.retrieveConfig().propertyValueInt("junit.test.tomcat.port", 8080);
-    boolean ssl = GrouperConfig.retrieveConfig().propertyValueBoolean("junit.test.tomcat.ssl", false);
-    String domainName = GrouperConfig.retrieveConfig().propertyValueString("junit.test.tomcat.domainName", "localhost");
-
-    String baseUrl = "http" + (ssl ? "s" : "") + "://" + domainName + ":" + port + "/grouper/mockServices/emma";
+  public static void setupEmmaExternalSystem(String emmaExternalSystemConfigId, boolean realEmma) {
 
     String prefix = "grouper.wsBearerToken." + emmaExternalSystemConfigId + ".";
 
-    new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName(prefix + "endpoint").value(baseUrl).store();
-    new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName(prefix + "httpAuthnType").value("basicAuth").store();
-    new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName(prefix + "basicAuthUser").value("emmaPublicKey").store();
-    new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName(prefix + "basicAuthPassword").value("emmaPrivateKey").store();
-    new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName(prefix + "basicAuthStandardUserOrder").value("false").store();
+    if (realEmma) {
 
-    // EmmaMockServiceHandler.checkAuthorization() looks up the wsBearerToken configId through this indirection
-    new GrouperDbConfig().configFileName("grouper.properties").propertyName("grouperTest.exampleEmma.mockExternalSystem.configId").value(emmaExternalSystemConfigId).store();
+      // supply endpoint (including the account id), basicAuthUser (public API key)
+      // and basicAuthPassword (private API key) through the usual config for a
+      // real run; nothing mock-specific is set here.
+      new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName(prefix + "endpoint").value("https://api.e2ma.net/CHANGE_ME_ACCOUNT_ID").store();
 
-    ConfigPropertiesCascadeBase.clearCache();
+    } else {
+
+      int port = GrouperConfig.retrieveConfig().propertyValueInt("junit.test.tomcat.port", 8080);
+      boolean ssl = GrouperConfig.retrieveConfig().propertyValueBoolean("junit.test.tomcat.ssl", false);
+      String domainName = GrouperConfig.retrieveConfig().propertyValueString("junit.test.tomcat.domainName", "localhost");
+
+      // the mock account id is just part of the path; the handler ignores it and
+      // routes on the trailing groups/members segments
+      String baseUrl = "http" + (ssl ? "s" : "") + "://" + domainName + ":" + port + "/grouper/mockServices/emma/123456";
+
+      new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName(prefix + "endpoint").value(baseUrl).store();
+      new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName(prefix + "basicAuthUser").value("myPublicApiKey").store();
+      new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName(prefix + "basicAuthPassword").value("myPrivateApiKey").store();
+    }
+
+    // EmmaMockServiceHandler.checkAuthorization reads this from grouper.properties
+    // to know which external system's credentials to validate the request against
+    new GrouperDbConfig().configFileName("grouper.properties")
+        .propertyName("grouperTest.exampleEmma.mockExternalSystem.configId").value(emmaExternalSystemConfigId).store();
   }
 
   /**
@@ -73,7 +85,12 @@ public class EmmaProvisionerTestUtils {
    */
   public static void configureEmmaProvisioner(EmmaProvisionerTestConfigInput input) {
 
-    setupEmmaExternalSystem(input.getEmmaExternalSystemConfigId());
+    setupEmmaExternalSystem(input.getEmmaExternalSystemConfigId(), input.isRealEmma());
+
+    if (2 != input.getGroupAttributeCount()) {
+      throw new RuntimeException("Emma groups only have id and name; expecting 2 for groupAttributeCount but was '"
+          + input.getGroupAttributeCount() + "'");
+    }
 
     configureProvisionerSuffix(input, "class", EmmaProvisioner.class.getName());
     configureProvisionerSuffix(input, "emmaExternalSystemConfigId", input.getEmmaExternalSystemConfigId());
@@ -84,6 +101,9 @@ public class EmmaProvisionerTestUtils {
     configureProvisionerSuffix(input, "showAdvanced", "true");
     configureProvisionerSuffix(input, "subjectSourcesToProvision", "jdbc");
 
+    // the mock service is synchronous, so there is nothing to wait for after an insert
+    configureProvisionerSuffix(input, "sleepBeforeSelectAfterInsertMillis", "0");
+
     configureProvisionerSuffix(input, "provisioningType", "membershipObjects");
     configureProvisionerSuffix(input, "operateOnGrouperGroups", "true");
     configureProvisionerSuffix(input, "operateOnGrouperEntities", "true");
@@ -93,7 +113,7 @@ public class EmmaProvisionerTestUtils {
     configureProvisionerSuffix(input, "errorHandlingShow", "true");
 
     // ---------------------------------------------------------------
-    // groups
+    // groups (Emma member groups)
     // ---------------------------------------------------------------
 
     configureProvisionerSuffix(input, "customizeGroupCrud", "true");
@@ -104,21 +124,26 @@ public class EmmaProvisionerTestUtils {
     configureProvisionerSuffix(input, "selectGroups", "true");
     configureProvisionerSuffix(input, "selectAllGroups", input.isSelectAll() ? "true" : "false");
 
-    // id - assigned by Emma, read only
-    configureProvisionerSuffix(input, "targetGroupAttribute.0.name", "id");
-    configureProvisionerSuffix(input, "targetGroupAttribute.0.showAdvancedAttribute", "true");
-    configureProvisionerSuffix(input, "targetGroupAttribute.0.showAttributeCrud", "true");
-    configureProvisionerSuffix(input, "targetGroupAttribute.0.insert", "false");
-    configureProvisionerSuffix(input, "targetGroupAttribute.0.update", "false");
+    int groupAttributeIndex = 0;
 
-    // name - Emma groups have no full-path concept, so use the group extension
-    configureProvisionerSuffix(input, "targetGroupAttribute.1.name", "name");
-    configureProvisionerSuffix(input, "targetGroupAttribute.1.translateExpressionType", "grouperProvisioningGroupField");
-    configureProvisionerSuffix(input, "targetGroupAttribute.1.translateFromGrouperProvisioningGroupField", "extension");
+    // id - the member_group_id, read only: assigned by Emma, never written
+    configureProvisionerSuffix(input, "targetGroupAttribute." + groupAttributeIndex + ".name", "id");
+    configureProvisionerSuffix(input, "targetGroupAttribute." + groupAttributeIndex + ".showAdvancedAttribute", "true");
+    configureProvisionerSuffix(input, "targetGroupAttribute." + groupAttributeIndex + ".showAttributeCrud", "true");
+    configureProvisionerSuffix(input, "targetGroupAttribute." + groupAttributeIndex + ".insert", "false");
+    configureProvisionerSuffix(input, "targetGroupAttribute." + groupAttributeIndex + ".update", "false");
+    groupAttributeIndex++;
 
-    configureProvisionerSuffix(input, "numberOfGroupAttributes", "2");
+    // name - the group_name
+    configureProvisionerSuffix(input, "targetGroupAttribute." + groupAttributeIndex + ".name", "name");
+    configureProvisionerSuffix(input, "targetGroupAttribute." + groupAttributeIndex + ".translateExpressionType", "grouperProvisioningGroupField");
+    configureProvisionerSuffix(input, "targetGroupAttribute." + groupAttributeIndex + ".translateFromGrouperProvisioningGroupField", input.getGroupNameMapping());
+    groupAttributeIndex++;
 
-    // match a group on name first (before it has a target id), then on id once known
+    configureProvisionerSuffix(input, "numberOfGroupAttributes", "" + groupAttributeIndex);
+
+    // match a group on name first (that is all we can search on before it has an
+    // id), then on id once it is known
     configureProvisionerSuffix(input, "hasTargetGroupLink", "true");
     configureProvisionerSuffix(input, "groupMatchingAttributeCount", "2");
     configureProvisionerSuffix(input, "groupMatchingAttribute0name", "name");
@@ -129,42 +154,72 @@ public class EmmaProvisionerTestUtils {
     configureProvisionerSuffix(input, "groupAttributeValueCache0source", "target");
     configureProvisionerSuffix(input, "groupAttributeValueCache0type", "groupAttribute");
     configureProvisionerSuffix(input, "groupAttributeValueCache0groupAttribute", "id");
+    configureProvisionerSuffix(input, "groupAttributeValueCache1has", "true");
+    configureProvisionerSuffix(input, "groupAttributeValueCache1source", "target");
+    configureProvisionerSuffix(input, "groupAttributeValueCache1type", "groupAttribute");
+    configureProvisionerSuffix(input, "groupAttributeValueCache1groupAttribute", "name");
 
     // ---------------------------------------------------------------
-    // entities (members)
+    // entities (Emma members) - fully managed
     // ---------------------------------------------------------------
 
-    configureProvisionerSuffix(input, "customizeEntityCrud", "true");
     configureProvisionerSuffix(input, "makeChangesToEntities", "true");
     configureProvisionerSuffix(input, "insertEntities", "true");
     configureProvisionerSuffix(input, "updateEntities", "true");
     configureProvisionerSuffix(input, "deleteEntities", "true");
     configureProvisionerSuffix(input, "selectEntities", "true");
     configureProvisionerSuffix(input, "selectAllEntities", input.isSelectAll() ? "true" : "false");
+    configureProvisionerSuffix(input, "deleteEntitiesIfNotExistInGrouper", "false");
 
-    // id - assigned by Emma, read only
-    configureProvisionerSuffix(input, "targetEntityAttribute.0.name", "id");
-    configureProvisionerSuffix(input, "targetEntityAttribute.0.showAdvancedAttribute", "true");
-    configureProvisionerSuffix(input, "targetEntityAttribute.0.showAttributeCrud", "true");
-    configureProvisionerSuffix(input, "targetEntityAttribute.0.insert", "false");
-    configureProvisionerSuffix(input, "targetEntityAttribute.0.update", "false");
+    int entityAttributeIndex = 0;
 
-    // email - the value Emma members are keyed by, and what we can match a Grouper subject on
-    configureProvisionerSuffix(input, "targetEntityAttribute.1.name", "email");
-    configureProvisionerSuffix(input, "targetEntityAttribute.1.translateExpressionType", "grouperProvisioningEntityField");
-    configureProvisionerSuffix(input, "targetEntityAttribute.1.translateFromGrouperProvisioningEntityField", "email");
+    // id - the member_id, read only: assigned by Emma, never written
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".name", "id");
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".showAdvancedAttribute", "true");
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".showAttributeCrud", "true");
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".insert", "false");
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".update", "false");
+    entityAttributeIndex++;
 
-    configureProvisionerSuffix(input, "numberOfEntityAttributes", "2");
+    // email - Emma keys members on email, and it is what we match a subject on
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".name", "email");
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".translateExpressionType", "translationScript");
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".translateExpression",
+        "${grouperProvisioningEntity.retrieveAttributeValueString('email')}");
+    entityAttributeIndex++;
+
+    // firstName -> Emma fields.first_name
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".name", "firstName");
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".translateExpressionType", "translationScript");
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".translateExpression",
+        "${grouperProvisioningEntity.retrieveAttributeValueString('givenName')}");
+    entityAttributeIndex++;
+
+    // lastName -> Emma fields.last_name
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".name", "lastName");
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".translateExpressionType", "translationScript");
+    configureProvisionerSuffix(input, "targetEntityAttribute." + entityAttributeIndex + ".translateExpression",
+        "${grouperProvisioningEntity.retrieveAttributeValueString('sn')}");
+    entityAttributeIndex++;
+
+    // tests that add a user-defined field bump entityAttributeCount and register
+    // the extra targetEntityAttribute.N.* via addExtraConfig
+    configureProvisionerSuffix(input, "numberOfEntityAttributes", "" + input.getEntityAttributeCount());
 
     configureProvisionerSuffix(input, "hasTargetEntityLink", "true");
-    configureProvisionerSuffix(input, "entityMatchingAttributeCount", "1");
+    configureProvisionerSuffix(input, "entityMatchingAttributeCount", "2");
     configureProvisionerSuffix(input, "entityMatchingAttribute0name", "email");
+    configureProvisionerSuffix(input, "entityMatchingAttribute1name", "id");
 
     configureProvisionerSuffix(input, "entityAttributeValueCacheHas", "true");
     configureProvisionerSuffix(input, "entityAttributeValueCache0has", "true");
     configureProvisionerSuffix(input, "entityAttributeValueCache0source", "target");
     configureProvisionerSuffix(input, "entityAttributeValueCache0type", "entityAttribute");
     configureProvisionerSuffix(input, "entityAttributeValueCache0entityAttribute", "id");
+    configureProvisionerSuffix(input, "entityAttributeValueCache1has", "true");
+    configureProvisionerSuffix(input, "entityAttributeValueCache1source", "target");
+    configureProvisionerSuffix(input, "entityAttributeValueCache1type", "entityAttribute");
+    configureProvisionerSuffix(input, "entityAttributeValueCache1entityAttribute", "email");
 
     // ---------------------------------------------------------------
     // memberships
@@ -208,7 +263,7 @@ public class EmmaProvisionerTestUtils {
    */
   public static void registerJobs(String configId) {
 
-    new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName("otherJob.provisioner_full_" + configId + ".class").value(GrouperProvisioningFullSyncJob.class.getName()).store();
+    new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName("otherJob.provisioner_full_" + configId + ".class").value("edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningFullSyncJob").store();
     new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName("otherJob.provisioner_full_" + configId + ".quartzCron").value("9 59 23 31 12 ? 2099").store();
     new GrouperDbConfig().configFileName("grouper-loader.properties").propertyName("otherJob.provisioner_full_" + configId + ".provisionerConfigId").value(configId).store();
 

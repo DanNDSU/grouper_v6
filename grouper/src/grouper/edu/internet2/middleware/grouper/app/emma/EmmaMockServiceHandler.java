@@ -88,24 +88,10 @@ public class EmmaMockServiceHandler extends MockServiceHandler {
     String userName = Authentication.retrieveUsername(basicAuth);
     String password = Authentication.retrievePassword(basicAuth);
 
-    // The provisioner runs in the JUnit JVM and writes these values via GrouperDbConfig,
-    // but this handler runs in the webapp JVM with its own config cache. Refresh so we
-    // pick up the test's writes rather than a stale (or absent) cached value.
-    ConfigPropertiesCascadeBase.clearCache();
+    String configId = GrouperConfig.retrieveConfig().propertyValueStringRequired("grouperTest.exampleEmma.mockExternalSystem.configId");
 
-    String configId = GrouperConfig.retrieveConfig().propertyValueString("grouperTest.exampleEmma.mockExternalSystem.configId");
-
-    String expectedUserName = GrouperLoaderConfig.retrieveConfig().propertyValueString("grouper.wsBearerToken." + configId + ".basicAuthUser");
-    String expectedPassword = GrouperLoaderConfig.retrieveConfig().propertyValueString("grouper.wsBearerToken." + configId + ".basicAuthPassword");
-
-    // fall back to the known test credentials if config isn't visible in this JVM,
-    // the same way DuoMockServiceHandler defaults its expected keys
-    if (StringUtils.isBlank(expectedUserName)) {
-      expectedUserName = "emmaPublicKey";
-    }
-    if (StringUtils.isBlank(expectedPassword)) {
-      expectedPassword = "emmaPrivateKey";
-    }
+    String expectedUserName = GrouperLoaderConfig.retrieveConfig().propertyValueStringRequired("grouper.wsBearerToken." + configId + ".basicAuthUser");
+    String expectedPassword = GrouperLoaderConfig.retrieveConfig().propertyValueStringRequired("grouper.wsBearerToken." + configId + ".basicAuthPassword");
 
     if (!StringUtils.equals(expectedUserName, userName)) {
       throw new RuntimeException("Username does not match with what is in grouper config");

@@ -5,14 +5,14 @@ import junit.framework.TestCase;
 import junit.framework.TestSuite;
 
 /**
- * Modeled on AllTeamsChannelProvisionerTests.
+ * Modeled on AllTeamsChannelProvisionerTests / AllAzureProvisionerTests.
  */
 public class AllEmmaProvisionerTests extends TestCase {
 
   public static Test suite() {
     TestSuite suite = new TestSuite(AllEmmaProvisionerTests.class.getName());
     //$JUnit-BEGIN$
-    suite.addTestSuite(GrouperEmmaProvisionerTest.class);
+    suite.addTestSuite(EmmaProvisionerTest.class);
     //$JUnit-END$
     return suite;
   }
