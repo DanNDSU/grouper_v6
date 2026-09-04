@@ -192,6 +192,7 @@ To run a specific suite, Add the suffix of the suite after the AllTests class:
 - (not normally run) ddl.AllDdlTests
 - app.duo.AllDuoProvisionerTests
 - app.duo.role.AllDuoRoleProvisionerTests
+- app.emma.AllEmmaProvisionerTests
 - externalSubjects.AllExternalSubjectTests
 - filter.AllFilterTests
 - app.google.AllGoogleProvisionerTests
