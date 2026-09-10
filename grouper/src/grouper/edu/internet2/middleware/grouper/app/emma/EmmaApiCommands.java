@@ -52,6 +52,14 @@ public class EmmaApiCommands {
     try {
       String configId = "emma";
       
+      long start = System.nanoTime();
+      
+      addGroupMembership(configId, 59627782L, 158879826182L);
+      
+      long elapsedNanos = System.nanoTime() - start;
+      double elapsedMillis = elapsedNanos / 1_000_000.0;
+      System.out.printf("Elapsed: %.3f ms%n", elapsedMillis);
+      
       System.out.println(configId + " done");
       
     } catch (Exception e) {

@@ -4,9 +4,6 @@ import junit.framework.Test;
 import junit.framework.TestCase;
 import junit.framework.TestSuite;
 
-/**
- * Modeled on AllTeamsChannelProvisionerTests / AllAzureProvisionerTests.
- */
 public class AllEmmaProvisionerTests extends TestCase {
 
   public static Test suite() {

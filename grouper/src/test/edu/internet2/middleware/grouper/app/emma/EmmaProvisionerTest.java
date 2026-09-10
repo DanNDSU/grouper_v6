@@ -1,744 +1,1395 @@
 package edu.internet2.middleware.grouper.app.emma;
 
-import java.util.ArrayList;
+
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
-import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import edu.internet2.middleware.grouper.Group;
 import edu.internet2.middleware.grouper.GroupSave;
 import edu.internet2.middleware.grouper.GrouperSession;
 import edu.internet2.middleware.grouper.Stem;
 import edu.internet2.middleware.grouper.StemSave;
-import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioner;
 import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningAttributeValue;
 import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningBaseTest;
-import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningDiagnosticsContainer;
-import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningOutput;
 import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningService;
-import edu.internet2.middleware.grouper.app.provisioning.GrouperProvisioningType;
-import edu.internet2.middleware.grouper.app.provisioning.ProvisioningEntity;
-import edu.internet2.middleware.grouper.app.provisioning.ProvisioningGroup;
-import edu.internet2.middleware.grouper.app.provisioning.ProvisioningMembership;
+import edu.internet2.middleware.grouper.cfg.dbConfig.GrouperDbConfig;
 import edu.internet2.middleware.grouper.helper.SubjectTestHelper;
-import edu.internet2.middleware.grouper.hibernate.HibernateSession;
 import edu.internet2.middleware.grouper.misc.GrouperStartup;
 import edu.internet2.middleware.grouper.misc.SaveMode;
 import edu.internet2.middleware.grouper.util.GrouperUtil;
+import edu.internet2.middleware.grouperClient.config.ConfigPropertiesCascadeBase;
 import edu.internet2.middleware.grouperClient.jdbc.GcDbAccess;
-import edu.internet2.middleware.grouperClient.jdbc.tableSync.GcGrouperSync;
-import edu.internet2.middleware.grouperClient.jdbc.tableSync.GcGrouperSyncDao;
-import edu.internet2.middleware.grouperClient.jdbc.tableSync.GcGrouperSyncGroup;
 import junit.textui.TestRunner;
 
-/**
- * Tests for the Emma (e2ma) provisioner, running against EmmaMockServiceHandler.
- *
- * Modeled on GrouperTeamsChannelProvisionerTest / GrouperAzureProvisionerTest.
- *
- * Unlike the Teams channel provisioner, Emma manages its own members: the
- * /members/add endpoint upserts a member keyed on email and returns the
- * member_id, so the provisioner inserts, updates and deletes members as well as
- * groups and memberships.  There is therefore no external directory to seed - a
- * subject that ends up in an Emma group first becomes an Emma member.
- */
 public class EmmaProvisionerTest extends GrouperProvisioningBaseTest {
 
   public static void main(String[] args) {
-    TestRunner.run(new EmmaProvisionerTest("testFullSyncEmma"));
+
+    EmmaMockServiceHandler.ensureEmmaMockTables();
+    TestRunner.run(new EmmaProvisionerTest("testAddMemberByCustomField"));
+
+    System.exit(0);
   }
+
+  @Override
+  public String defaultConfigId() {
+    return "emmaProvisioner";
+  }
+
+  public static boolean startTomcat = false;
 
   public EmmaProvisionerTest(String name) {
     super(name);
   }
 
-  public EmmaProvisionerTest() {
-  }
-
-  public static boolean startTomcat = false;
-
   @Override
-  public void setUp() {
+  protected void setUp() {
     super.setUp();
 
-    // create the mock tables if they are not already there
     EmmaMockServiceHandler.ensureEmmaMockTables();
 
     new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_membership").executeSql();
-    new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_member").executeSql();
     new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_group").executeSql();
+    new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_member").executeSql();
   }
 
-  @Override
-  public String defaultConfigId() {
-    return "myEmmaProvisioner";
-  }
+  // ============================================================================
+  // Group API tests
+  // ============================================================================
 
-  // ==================================================================
-  // helpers
-  // ==================================================================
+  public void testRetrieveGroups() {
 
-  private static List<EmmaGroup> emmaGroups() {
-    return HibernateSession.byHqlStatic().createQuery("from EmmaGroup").list(EmmaGroup.class);
-  }
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
 
-  private static EmmaGroup onlyEmmaGroup() {
-    List<EmmaGroup> groups = emmaGroups();
-    assertEquals("expecting exactly one Emma group", 1, groups.size());
-    return groups.get(0);
-  }
+    // insert some groups directly into the mock table (Emma groups have only id + group_name)
+    new GcDbAccess().connectionName("grouper").sql("insert into mock_emma_group (id, group_name) values (1001, 'IT Support')").executeSql();
+    new GcDbAccess().connectionName("grouper").sql("insert into mock_emma_group (id, group_name) values (1002, 'HR Team')").executeSql();
+    new GcDbAccess().connectionName("grouper").sql("insert into mock_emma_group (id, group_name) values (1003, 'Engineering')").executeSql();
 
-  private static List<EmmaMember> emmaMembers() {
-    return HibernateSession.byHqlStatic().createQuery("from EmmaMember").list(EmmaMember.class);
-  }
+    List<EmmaGroup> groups = EmmaApiCommands.retrieveGroups("emmaDev");
 
-  private static List<EmmaMembership> emmaMemberships() {
-    return HibernateSession.byHqlStatic().createQuery("from EmmaMembership").list(EmmaMembership.class);
-  }
+    assertEquals(3, groups.size());
 
-  private static int emmaMembershipCount() {
-    return emmaMemberships().size();
-  }
-
-  private static EmmaMember emmaMemberByEmail(String email) {
-    List<EmmaMember> members = HibernateSession.byHqlStatic()
-        .createQuery("from EmmaMember where email = :theEmail")
-        .setString("theEmail", email).list(EmmaMember.class);
-    return GrouperUtil.length(members) == 0 ? null : members.get(0);
-  }
-
-  /**
-   * the email an Emma member is keyed on for a given test subject.  The email
-   * entity attribute is translated from the subject's email attribute; the jdbc
-   * test subjects expose one as "id@some.address" - adjust here if the source
-   * mapping differs in your environment.
-   */
-  private static String emailForSubject(String subjectId) {
-    return subjectId + "@example.edu";
-  }
-
-  /**
-   * mark a folder as provisionable by this provisioner
-   * @param stem
-   * @param metadataNameValues optional metadata, may be null
-   */
-  private void assignProvisioningAttribute(Stem stem, Map<String, Object> metadataNameValues) {
-
-    GrouperProvisioningAttributeValue attributeValue = new GrouperProvisioningAttributeValue();
-    attributeValue.setDirectAssignment(true);
-    attributeValue.setDoProvision(defaultConfigId());
-    attributeValue.setTargetName(defaultConfigId());
-    attributeValue.setStemScopeString("sub");
-    if (metadataNameValues != null) {
-      attributeValue.setMetadataNameValues(metadataNameValues);
+    Map<Long, EmmaGroup> groupById = new HashMap<Long, EmmaGroup>();
+    for (EmmaGroup group : groups) {
+      groupById.put(group.getId(), group);
     }
 
-    GrouperProvisioningService.saveOrUpdateProvisioningAttributes(attributeValue, stem);
+    EmmaGroup group1001 = groupById.get(1001L);
+    assertNotNull(group1001);
+    assertEquals("IT Support", group1001.getName());
+
+    EmmaGroup group1002 = groupById.get(1002L);
+    assertNotNull(group1002);
+    assertEquals("HR Team", group1002.getName());
+
+    EmmaGroup group1003 = groupById.get(1003L);
+    assertNotNull(group1003);
+    assertEquals("Engineering", group1003.getName());
   }
 
-  private void validateNoErrors(GrouperProvisioningDiagnosticsContainer grouperProvisioningDiagnosticsContainer) {
-    String[] lines = grouperProvisioningDiagnosticsContainer.getReportFinal().split("\n");
-    List<String> errorLines = new ArrayList<String>();
-    for (String line : lines) {
-      if (line.contains("'red'") || line.contains("Error:")) {
-        errorLines.add(line);
+  public void testRetrieveGroup() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    // insert a group directly into the mock table
+    new GcDbAccess().connectionName("grouper").sql("insert into mock_emma_group (id, group_name) values (1001, 'IT Support')").executeSql();
+
+    // retrieve existing group
+    EmmaGroup group = EmmaApiCommands.retrieveGroup("emmaDev", 1001L);
+
+    assertNotNull(group);
+    assertEquals(1001L, (long)group.getId());
+    assertEquals("IT Support", group.getName());
+
+    // retrieve non-existing group should return null (mock returns 404)
+    EmmaGroup notFound = EmmaApiCommands.retrieveGroup("emmaDev", 9999L);
+
+    assertNull(notFound);
+  }
+
+  public void testCreateGroup() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    EmmaGroup groupToCreate = new EmmaGroup();
+    groupToCreate.setName("Branch Managers");
+
+    // create the group (Emma POST /groups wraps the group in a { "groups": [ ... ] } envelope
+    // and returns an array of created groups)
+    EmmaGroup createdGroup = EmmaApiCommands.createGroup("emmaDev", groupToCreate);
+
+    assertNotNull(createdGroup);
+    assertTrue(createdGroup.getId() > 0);
+    assertEquals("Branch Managers", createdGroup.getName());
+
+    // verify it can be retrieved
+    EmmaGroup retrievedGroup = EmmaApiCommands.retrieveGroup("emmaDev", createdGroup.getId());
+
+    assertNotNull(retrievedGroup);
+    assertEquals(createdGroup.getId(), retrievedGroup.getId());
+    assertEquals("Branch Managers", retrievedGroup.getName());
+  }
+
+  public void testUpdateGroup() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    // create a group to update
+    EmmaGroup groupToCreate = new EmmaGroup();
+    groupToCreate.setName("Original Name");
+
+    EmmaGroup createdGroup = EmmaApiCommands.createGroup("emmaDev", groupToCreate);
+    assertNotNull(createdGroup);
+    assertTrue(createdGroup.getId() > 0);
+
+    // update the group name (Emma groups only have a name)
+    EmmaGroup groupToUpdate = new EmmaGroup();
+    groupToUpdate.setId(createdGroup.getId());
+    groupToUpdate.setName("Human Resources");
+
+    EmmaApiCommands.updateGroup("emmaDev", groupToUpdate);
+
+    // verify via retrieve that the new name persisted
+    EmmaGroup retrievedGroup = EmmaApiCommands.retrieveGroup("emmaDev", createdGroup.getId());
+    assertNotNull(retrievedGroup);
+    assertEquals("Human Resources", retrievedGroup.getName());
+
+    // update with an id of 0 / null should throw
+    EmmaGroup badGroup = new EmmaGroup();
+    badGroup.setName("No Id");
+    try {
+      EmmaApiCommands.updateGroup("emmaDev", badGroup);
+      fail("Should have thrown exception for group with unset id");
+    } catch (RuntimeException e) {
+      assertTrue(e.getMessage().contains("null or 0"));
+    }
+  }
+
+  public void testDeleteGroup() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    // create a group to delete
+    EmmaGroup groupToCreate = new EmmaGroup();
+    groupToCreate.setName("Temp Group");
+
+    EmmaGroup createdGroup = EmmaApiCommands.createGroup("emmaDev", groupToCreate);
+    assertNotNull(createdGroup);
+    assertTrue(createdGroup.getId() > 0);
+
+    // verify it exists
+    EmmaGroup retrievedGroup = EmmaApiCommands.retrieveGroup("emmaDev", createdGroup.getId());
+    assertNotNull(retrievedGroup);
+
+    // delete the group
+    EmmaApiCommands.deleteGroup("emmaDev", createdGroup.getId());
+
+    // verify it no longer exists
+    EmmaGroup deletedGroup = EmmaApiCommands.retrieveGroup("emmaDev", createdGroup.getId());
+    assertNull(deletedGroup);
+
+    // delete again should not throw an error (404 is an accepted return code)
+    EmmaApiCommands.deleteGroup("emmaDev", createdGroup.getId());
+  }
+
+  // ============================================================================
+  // Member API tests
+  // ============================================================================
+
+  public void testRetrieveMembers() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    // insert some members directly into the mock table. first_name / last_name and any
+    // user-defined values are surfaced by the mock inside the JSON "fields" object.
+    new GcDbAccess().connectionName("grouper")
+        .sql("insert into mock_emma_member (id, email, first_name, last_name, member_status_id) values (2001, 'jsmith@test.edu', 'John', 'Smith', 'a')")
+        .executeSql();
+    new GcDbAccess().connectionName("grouper")
+        .sql("insert into mock_emma_member (id, email, first_name, last_name, member_status_id) values (2002, 'jdoe@test.edu', 'Jane', 'Doe', 'a')")
+        .executeSql();
+    new GcDbAccess().connectionName("grouper")
+        .sql("insert into mock_emma_member (id, email, first_name, last_name, member_status_id) values (2003, 'bwilson@test.edu', 'Bob', 'Wilson', 'o')")
+        .executeSql();
+
+    List<EmmaMember> members = EmmaApiCommands.retrieveMembers("emmaDev");
+
+    assertEquals(3, members.size());
+
+    Map<Long, EmmaMember> memberById = new HashMap<Long, EmmaMember>();
+    for (EmmaMember member : members) {
+      memberById.put(member.getId(), member);
+    }
+
+    EmmaMember member2001 = memberById.get(2001L);
+    assertNotNull(member2001);
+    assertEquals("jsmith@test.edu", member2001.getEmail());
+    assertEquals("John", member2001.getFirstName());
+    assertEquals("Smith", member2001.getLastName());
+    assertEquals("a", member2001.getMemberStatusId());
+
+    EmmaMember member2002 = memberById.get(2002L);
+    assertNotNull(member2002);
+    assertEquals("jdoe@test.edu", member2002.getEmail());
+    assertEquals("Jane", member2002.getFirstName());
+    assertEquals("Doe", member2002.getLastName());
+
+    EmmaMember member2003 = memberById.get(2003L);
+    assertNotNull(member2003);
+    assertEquals("bwilson@test.edu", member2003.getEmail());
+    assertEquals("o", member2003.getMemberStatusId());
+  }
+
+  public void testRetrieveMemberById() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    new GcDbAccess().connectionName("grouper")
+        .sql("insert into mock_emma_member (id, email, first_name, last_name, member_status_id) values (2001, 'jsmith@test.edu', 'John', 'Smith', 'a')")
+        .executeSql();
+
+    // retrieve existing member
+    EmmaMember member = EmmaApiCommands.retrieveMemberById("emmaDev", 2001L);
+
+    assertNotNull(member);
+    assertEquals(2001L, (long)member.getId());
+    assertEquals("jsmith@test.edu", member.getEmail());
+    assertEquals("John", member.getFirstName());
+    assertEquals("Smith", member.getLastName());
+
+    // retrieve non-existing member should return null
+    EmmaMember notFound = EmmaApiCommands.retrieveMemberById("emmaDev", 9999L);
+
+    assertNull(notFound);
+  }
+
+  public void testRetrieveMemberByEmail() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    new GcDbAccess().connectionName("grouper")
+        .sql("insert into mock_emma_member (id, email, first_name, last_name, member_status_id) values (2001, 'jsmith@test.edu', 'John', 'Smith', 'a')")
+        .executeSql();
+    new GcDbAccess().connectionName("grouper")
+        .sql("insert into mock_emma_member (id, email, first_name, last_name, member_status_id) values (2002, 'jdoe@test.edu', 'Jane', 'Doe', 'a')")
+        .executeSql();
+
+    // retrieve existing member by email
+    EmmaMember member = EmmaApiCommands.retrieveMemberByEmail("emmaDev", "jsmith@test.edu");
+
+    assertNotNull(member);
+    assertEquals(2001L, (long)member.getId());
+    assertEquals("jsmith@test.edu", member.getEmail());
+    assertEquals("John", member.getFirstName());
+    assertEquals("Smith", member.getLastName());
+
+    // retrieve non-existing email should return null
+    EmmaMember notFound = EmmaApiCommands.retrieveMemberByEmail("emmaDev", "nobody@test.edu");
+
+    assertNull(notFound);
+
+    // blank email should short-circuit to null
+    EmmaMember blank = EmmaApiCommands.retrieveMemberByEmail("emmaDev", "");
+    assertNull(blank);
+  }
+
+  public void testRetrieveMemberByAttribute() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    new GcDbAccess().connectionName("grouper")
+        .sql("insert into mock_emma_member (id, email, first_name, last_name, member_status_id) values (2001, 'jsmith@test.edu', 'John', 'Smith', 'a')")
+        .executeSql();
+
+    // lookup by id
+    EmmaMember byId = EmmaApiCommands.retrieveMemberByAttribute("emmaDev", "id", 2001L);
+    assertNotNull(byId);
+    assertEquals("jsmith@test.edu", byId.getEmail());
+
+    // lookup by email
+    EmmaMember byEmail = EmmaApiCommands.retrieveMemberByAttribute("emmaDev", "email", "jsmith@test.edu");
+    assertNotNull(byEmail);
+    assertEquals(2001L, (long)byEmail.getId());
+
+    // null value returns null
+    EmmaMember nullValue = EmmaApiCommands.retrieveMemberByAttribute("emmaDev", "id", null);
+    assertNull(nullValue);
+
+    // blank attribute name throws
+    try {
+      EmmaApiCommands.retrieveMemberByAttribute("emmaDev", "", "x");
+      fail("Should have thrown for blank attribute name");
+    } catch (RuntimeException e) {
+      assertTrue(e.getMessage().contains("attributeName is required"));
+    }
+
+    // unsupported attribute name throws
+    try {
+      EmmaApiCommands.retrieveMemberByAttribute("emmaDev", "firstName", "John");
+      fail("Should have thrown for unsupported attribute name");
+    } catch (RuntimeException e) {
+      assertTrue(e.getMessage().contains("Unsupported attributeName"));
+    }
+  }
+
+  /**
+   * addMember on a brand new email should create the member (added=true) and return the id.
+   */
+  public void testAddMemberCreatesNew() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    EmmaMember memberToAdd = new EmmaMember();
+    memberToAdd.setEmail("newmember@test.edu");
+    memberToAdd.setFirstName("New");
+    memberToAdd.setLastName("Member");
+
+    EmmaMember created = EmmaApiCommands.addMember("emmaDev", memberToAdd);
+
+    assertNotNull(created);
+    assertNotNull(created.getId());
+    assertTrue(created.getId() > 0);
+
+    // verify via retrieve
+    EmmaMember retrieved = EmmaApiCommands.retrieveMemberById("emmaDev", created.getId());
+    assertNotNull(retrieved);
+    assertEquals("newmember@test.edu", retrieved.getEmail());
+    assertEquals("New", retrieved.getFirstName());
+    assertEquals("Member", retrieved.getLastName());
+  }
+
+  /**
+   * Emma keys members on email, so addMember on an existing email should UPDATE the
+   * existing member (not create a duplicate) and return that member's id.
+   */
+  public void testAddMemberUpdatesExistingByEmail() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    // seed an existing member
+    EmmaMember first = new EmmaMember();
+    first.setEmail("existing@test.edu");
+    first.setFirstName("Existing");
+    first.setLastName("Member");
+    EmmaMember seeded = EmmaApiCommands.addMember("emmaDev", first);
+    assertNotNull(seeded.getId());
+
+    // add again with the same email but a different first name
+    EmmaMember second = new EmmaMember();
+    second.setEmail("existing@test.edu");
+    second.setFirstName("Updated");
+    second.setLastName("Member");
+
+    EmmaMember result = EmmaApiCommands.addMember("emmaDev", second);
+
+    assertNotNull(result);
+    // same id (updated, not created new)
+    assertEquals(seeded.getId(), result.getId());
+
+    // only one member with that email should exist
+    List<EmmaMember> all = EmmaApiCommands.retrieveMembers("emmaDev");
+    int count = 0;
+    for (EmmaMember m : all) {
+      if ("existing@test.edu".equals(m.getEmail())) {
+        count++;
       }
     }
-    if (errorLines.size() > 0) {
-      fail("There are " + errorLines.size() + " errors in report: " + errorLines);
-    }
-  }
+    assertEquals(1, count);
 
-  // ==================================================================
-  // pure unit tests - no mock service or tomcat needed
-  // ==================================================================
-
-  /**
-   * a group round trips through the Emma json shape.  The request-side
-   * serializer only ever emits group_name (the id is assigned by Emma), while a
-   * response carries member_group_id + group_name.
-   */
-  public void testGroupJsonRoundTrip() {
-
-    EmmaGroup group = new EmmaGroup();
-    group.setId(4242L);
-    group.setName("test:testGroup");
-
-    // toJson is the request body: only group_name, never the id
-    String json = GrouperUtil.jsonJacksonToString(group.toJson(null));
-    assertTrue(json, json.contains("\"group_name\""));
-    assertFalse(json, json.contains("member_group_id"));
-    assertFalse(json, json.contains("\"id\""));
-
-    // a response from Emma carries member_group_id
-    EmmaGroup fromJson = EmmaGroup.fromJson(GrouperUtil.jsonJacksonNode(
-        "{\"member_group_id\":123,\"group_name\":\"test:testGroup\",\"group_type\":\"g\"}"));
-    assertEquals(new Long(123L), fromJson.getId());
-    assertEquals("test:testGroup", fromJson.getName());
-
-    // null node means no group
-    assertNull(EmmaGroup.fromJson(null));
+    // the first name should have been updated
+    EmmaMember retrieved = EmmaApiCommands.retrieveMemberById("emmaDev", seeded.getId());
+    assertNotNull(retrieved);
+    assertEquals("Updated", retrieved.getFirstName());
   }
 
   /**
-   * a group translates to and from a target ProvisioningGroup, carrying name as
-   * an attribute
+   * addMember requires an email; a blank email should throw before any HTTP call.
    */
-  public void testGroupToAndFromProvisioningGroup() {
+  public void testAddMemberEmailRequired() {
 
-    EmmaGroup group = new EmmaGroup();
-    group.setId(99L);
-    group.setName("some:group:name");
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
 
-    ProvisioningGroup provisioningGroup = group.toProvisioningGroup();
-    assertEquals("99", provisioningGroup.getId());
-    assertEquals("some:group:name", provisioningGroup.retrieveAttributeValueString("name"));
-
-    EmmaGroup roundTripped = EmmaGroup.fromProvisioningGroup(provisioningGroup, null);
-    assertEquals(group.getId(), roundTripped.getId());
-    assertEquals(group.getName(), roundTripped.getName());
-
-    // a provisioning group with no id yields a null-id EmmaGroup (pre-insert)
-    ProvisioningGroup noId = new ProvisioningGroup();
-    noId.assignAttributeValue("name", "brandNew");
-    EmmaGroup preInsert = EmmaGroup.fromProvisioningGroup(noId, null);
-    assertNull(preInsert.getId());
-    assertEquals("brandNew", preInsert.getName());
-  }
-
-  /**
-   * a member round trips through the Emma json shape.  first_name / last_name and
-   * any user-defined values live inside the nested "fields" object; the request
-   * body is { email, fields: { ... } }.
-   */
-  public void testMemberJsonRoundTrip() {
-
-    EmmaMember member = new EmmaMember();
-    member.setId(7L);
-    member.setEmail("jdoe@example.edu");
-    member.setFirstName("Jane");
-    member.setLastName("Doe");
-
-    ObjectNode toJson = member.toJson(null);
-    assertEquals("jdoe@example.edu", GrouperUtil.jsonJacksonGetString(toJson, "email"));
-    // id is never sent in the body
-    assertFalse(GrouperUtil.jsonJacksonToString(toJson), GrouperUtil.jsonJacksonToString(toJson).contains("member_id"));
-    // first/last name are nested under fields
-    assertEquals("Jane", GrouperUtil.jsonJacksonGetString(
-        GrouperUtil.jsonJacksonGetNode(toJson, "fields"), "first_name"));
-    assertEquals("Doe", GrouperUtil.jsonJacksonGetString(
-        GrouperUtil.jsonJacksonGetNode(toJson, "fields"), "last_name"));
-
-    // a response from Emma carries member_id, email, member_status_id and the fields object
-    EmmaMember fromJson = EmmaMember.fromJson(GrouperUtil.jsonJacksonNode(
-        "{\"member_id\":7,\"email\":\"jdoe@example.edu\",\"member_status_id\":\"a\","
-            + "\"fields\":{\"first_name\":\"Jane\",\"last_name\":\"Doe\"}}"));
-    assertEquals(new Long(7L), fromJson.getId());
-    assertEquals("jdoe@example.edu", fromJson.getEmail());
-    assertEquals("a", fromJson.getMemberStatusId());
-    assertEquals("Jane", fromJson.getFirstName());
-    assertEquals("Doe", fromJson.getLastName());
-
-    assertNull(EmmaMember.fromJson(null));
-  }
-
-  /**
-   * user-defined values other than first_name / last_name surface as
-   * provisioning attributes named field_&lt;name&gt;, and round trip back into
-   * the Emma "fields" object.  first_name / last_name are modeled directly and
-   * must not be duplicated into customFields.
-   */
-  public void testMemberCustomFieldsRoundTrip() {
-
-    EmmaMember fromJson = EmmaMember.fromJson(GrouperUtil.jsonJacksonNode(
-        "{\"member_id\":8,\"email\":\"x@example.edu\","
-            + "\"fields\":{\"first_name\":\"X\",\"last_name\":\"Y\",\"department\":\"IT\",\"employeeNumber\":12345,\"optIn\":true}}"));
-
-    // first/last name are modeled fields, not custom fields
-    assertFalse(fromJson.getCustomFields().containsKey("first_name"));
-    assertFalse(fromJson.getCustomFields().containsKey("last_name"));
-
-    // the rest are carried through, with numbers normalized to Long
-    assertEquals("IT", fromJson.getCustomFields().get("department"));
-    assertEquals(12345L, fromJson.getCustomFields().get("employeeNumber"));
-    assertEquals(Boolean.TRUE, fromJson.getCustomFields().get("optIn"));
-
-    // on a provisioning entity these appear prefixed with field_
-    ProvisioningEntity provisioningEntity = fromJson.toProvisioningEntity();
-    assertEquals("IT",
-        provisioningEntity.retrieveAttributeValueString(EmmaMember.CUSTOM_FIELD_ATTRIBUTE_PREFIX + "department"));
-    assertEquals(12345L,
-        provisioningEntity.retrieveAttributeValue(EmmaMember.CUSTOM_FIELD_ATTRIBUTE_PREFIX + "employeeNumber"));
-
-    // and back out to a member, they go into the request-body fields object
-    Set<String> fieldNames = new HashSet<String>();
-    fieldNames.add("email");
-    fieldNames.add(EmmaMember.CUSTOM_FIELD_ATTRIBUTE_PREFIX + "department");
-    EmmaMember backOut = EmmaMember.fromProvisioningEntity(provisioningEntity, fieldNames);
-    ObjectNode body = backOut.toJson(fieldNames);
-    assertEquals("IT", GrouperUtil.jsonJacksonGetString(
-        GrouperUtil.jsonJacksonGetNode(body, "fields"), "department"));
-  }
-
-  /**
-   * customFields values are constrained to String / Long / Boolean; a decimal or
-   * any other type is rejected rather than silently mangled
-   */
-  public void testMemberCustomFieldsRejectDecimal() {
-
-    EmmaMember member = new EmmaMember();
-    Map<String, Object> bad = new HashMap<String, Object>();
-    bad.put("score", 3.14d);
+    EmmaMember memberToAdd = new EmmaMember();
+    memberToAdd.setFirstName("No");
+    memberToAdd.setLastName("Email");
 
     try {
-      member.setCustomFields(bad);
-      fail("expecting a RuntimeException for a decimal custom field value");
+      EmmaApiCommands.addMember("emmaDev", memberToAdd);
+      fail("Should have thrown for missing email");
     } catch (RuntimeException e) {
-      assertTrue(e.getMessage(), e.getMessage().contains("score"));
+      assertTrue(e.getMessage().contains("email is required"));
     }
+
+    // nothing should have been created
+    List<EmmaMember> all = EmmaApiCommands.retrieveMembers("emmaDev");
+    assertEquals(0, all.size());
   }
 
   /**
-   * a membership translates to a target ProvisioningMembership keyed by group id
-   * and member (user) id
+   * addMember should round-trip user-defined fields (carried in the customFields map,
+   * which the Emma JSON nests under "fields").
    */
-  public void testMembershipToProvisioningMembership() {
+  public void testAddMemberByCustomField() {
 
-    EmmaMembership membership = new EmmaMembership();
-    membership.setId(1L);
-    membership.setGroupId(500L);
-    membership.setUserId(900L);
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
 
-    ProvisioningMembership provisioningMembership = membership.toProvisioningMembership();
-    assertEquals("500", provisioningMembership.getProvisioningGroupId());
-    assertEquals("900", provisioningMembership.getProvisioningEntityId());
-    assertEquals("1", provisioningMembership.getId());
+    Map<String, Object> customFields = new HashMap<String, Object>();
+    customFields.put("pennkey", "jsmith");
+    customFields.put("pennId", 12345678L);
+
+    EmmaMember memberToAdd = new EmmaMember();
+    memberToAdd.setEmail("jsmith@test.edu");
+    memberToAdd.setFirstName("John");
+    memberToAdd.setLastName("Smith");
+    memberToAdd.setCustomFields(customFields);
+
+    EmmaMember created = EmmaApiCommands.addMember("emmaDev", memberToAdd);
+    assertNotNull(created.getId());
+
+    EmmaMember retrieved = EmmaApiCommands.retrieveMemberById("emmaDev", created.getId());
+    assertNotNull(retrieved);
+    assertNotNull(retrieved.getCustomFields());
+    assertEquals("jsmith", retrieved.getCustomFields().get("pennkey"));
+    // numeric field values normalize to Long
+    assertEquals(12345678L, retrieved.getCustomFields().get("pennId"));
   }
 
-  // ==================================================================
-  // full sync
-  // ==================================================================
+  public void testUpdateMember() {
 
-  /**
-   * a provisionable group becomes an Emma group, its members become Emma members
-   * and group memberships; adding and removing members keeps Emma in sync
-   */
-  public void testFullSyncEmma() {
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
 
-    GrouperStartup.startup();
+    // create a member to update, with a couple of custom fields
+    Map<String, Object> customFields = new HashMap<String, Object>();
+    customFields.put("pennkey", "jsmith");
+    customFields.put("penn_id", "12345678");
 
-    if (startTomcat) {
-      tomcatStart();
+    EmmaMember memberToAdd = new EmmaMember();
+    memberToAdd.setEmail("jsmith@test.edu");
+    memberToAdd.setFirstName("John");
+    memberToAdd.setLastName("Smith");
+    memberToAdd.setCustomFields(customFields);
+
+    EmmaMember createdMember = EmmaApiCommands.addMember("emmaDev", memberToAdd);
+    assertNotNull(createdMember.getId());
+
+    // update email + firstName only
+    EmmaMember memberToUpdate = new EmmaMember();
+    memberToUpdate.setId(createdMember.getId());
+    memberToUpdate.setEmail("jsmith2@upenn.edu");
+    memberToUpdate.setFirstName("Johnny");
+
+    Set<String> fieldsToUpdate = new java.util.LinkedHashSet<String>();
+    fieldsToUpdate.add("email");
+    fieldsToUpdate.add("firstName");
+
+    EmmaApiCommands.updateMember("emmaDev", memberToUpdate, fieldsToUpdate);
+
+    EmmaMember retrievedMember = EmmaApiCommands.retrieveMemberById("emmaDev", createdMember.getId());
+    assertNotNull(retrievedMember);
+    assertEquals("jsmith2@upenn.edu", retrievedMember.getEmail());
+    assertEquals("Johnny", retrievedMember.getFirstName());
+    // last name untouched
+    assertEquals("Smith", retrievedMember.getLastName());
+
+    // update a custom field (field_ prefixed attribute names select which fields go on the wire)
+    Map<String, Object> updatedCustomFields = new HashMap<String, Object>();
+    updatedCustomFields.put("pennkey", "jsmith2");
+
+    EmmaMember memberToUpdate2 = new EmmaMember();
+    memberToUpdate2.setId(createdMember.getId());
+    memberToUpdate2.setCustomFields(updatedCustomFields);
+
+    Set<String> fieldsToUpdate2 = new java.util.LinkedHashSet<String>();
+    fieldsToUpdate2.add(EmmaMember.CUSTOM_FIELD_ATTRIBUTE_PREFIX + "pennkey");
+
+    EmmaApiCommands.updateMember("emmaDev", memberToUpdate2, fieldsToUpdate2);
+
+    EmmaMember retrievedMember2 = EmmaApiCommands.retrieveMemberById("emmaDev", createdMember.getId());
+    assertNotNull(retrievedMember2);
+    assertNotNull(retrievedMember2.getCustomFields());
+    assertEquals("jsmith2", retrievedMember2.getCustomFields().get("pennkey"));
+    // the previously stored penn_id field is preserved (mock merges fields)
+    assertEquals("12345678", retrievedMember2.getCustomFields().get("penn_id"));
+
+    // update a non-existing member should throw (mock returns 404, not an allowed code for PUT)
+    EmmaMember nonExisting = new EmmaMember();
+    nonExisting.setId(9999L);
+    nonExisting.setFirstName("Nobody");
+
+    Set<String> fieldsToUpdate3 = new java.util.LinkedHashSet<String>();
+    fieldsToUpdate3.add("firstName");
+
+    try {
+      EmmaApiCommands.updateMember("emmaDev", nonExisting, fieldsToUpdate3);
+      fail("Should have thrown exception for non-existing member");
+    } catch (RuntimeException e) {
+      assertTrue(e.getMessage().contains("404"));
+    }
+  }
+
+  public void testDeleteMember() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    // create a member to delete
+    EmmaMember memberToAdd = new EmmaMember();
+    memberToAdd.setEmail("jsmith@test.edu");
+    memberToAdd.setFirstName("John");
+    memberToAdd.setLastName("Smith");
+
+    EmmaMember createdMember = EmmaApiCommands.addMember("emmaDev", memberToAdd);
+    assertNotNull(createdMember.getId());
+
+    // verify it exists
+    EmmaMember retrievedMember = EmmaApiCommands.retrieveMemberById("emmaDev", createdMember.getId());
+    assertNotNull(retrievedMember);
+
+    // delete (archive) the member
+    EmmaApiCommands.deleteMember("emmaDev", createdMember.getId());
+
+    // verify it no longer exists
+    EmmaMember deletedMember = EmmaApiCommands.retrieveMemberById("emmaDev", createdMember.getId());
+    assertNull(deletedMember);
+
+    // delete again should not throw (404 is an accepted return code)
+    EmmaApiCommands.deleteMember("emmaDev", createdMember.getId());
+  }
+
+  // ============================================================================
+  // Membership API tests
+  // ============================================================================
+
+  public void testAddGroupMembership() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    // create a group and a member
+    EmmaGroup groupToCreate = new EmmaGroup();
+    groupToCreate.setName("IT Support");
+    EmmaGroup createdGroup = EmmaApiCommands.createGroup("emmaDev", groupToCreate);
+    assertNotNull(createdGroup);
+
+    EmmaMember memberToAdd = new EmmaMember();
+    memberToAdd.setEmail("jsmith@test.edu");
+    memberToAdd.setFirstName("John");
+    memberToAdd.setLastName("Smith");
+    EmmaMember createdMember = EmmaApiCommands.addMember("emmaDev", memberToAdd);
+    assertNotNull(createdMember.getId());
+
+    // verify no memberships exist yet
+    int count = new GcDbAccess().connectionName("grouper")
+        .sql("select count(*) from mock_emma_membership where group_id = ? and user_id = ?")
+        .addBindVar(createdGroup.getId()).addBindVar(createdMember.getId())
+        .select(int.class);
+    assertEquals(0, count);
+
+    // add membership
+    EmmaApiCommands.addGroupMembership("emmaDev", createdGroup.getId(), createdMember.getId());
+
+    count = new GcDbAccess().connectionName("grouper")
+        .sql("select count(*) from mock_emma_membership where group_id = ? and user_id = ?")
+        .addBindVar(createdGroup.getId()).addBindVar(createdMember.getId())
+        .select(int.class);
+    assertEquals(1, count);
+
+    // adding the same membership again should not create a duplicate (mock is idempotent)
+    EmmaApiCommands.addGroupMembership("emmaDev", createdGroup.getId(), createdMember.getId());
+
+    count = new GcDbAccess().connectionName("grouper")
+        .sql("select count(*) from mock_emma_membership where group_id = ? and user_id = ?")
+        .addBindVar(createdGroup.getId()).addBindVar(createdMember.getId())
+        .select(int.class);
+    assertEquals(1, count);
+
+    // null group id or member id should throw
+    try {
+      EmmaApiCommands.addGroupMembership("emmaDev", null, createdMember.getId());
+      fail("Should have thrown for null group id");
+    } catch (RuntimeException e) {
+      assertTrue(e.getMessage().contains("groupId is null"));
+    }
+    try {
+      EmmaApiCommands.addGroupMembership("emmaDev", createdGroup.getId(), null);
+      fail("Should have thrown for null member id");
+    } catch (RuntimeException e) {
+      assertTrue(e.getMessage().contains("memberId is null"));
+    }
+  }
+
+  public void testRemoveGroupMembership() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    EmmaGroup groupToCreate = new EmmaGroup();
+    groupToCreate.setName("IT Support");
+    EmmaGroup createdGroup = EmmaApiCommands.createGroup("emmaDev", groupToCreate);
+    assertNotNull(createdGroup);
+
+    EmmaMember member1 = new EmmaMember();
+    member1.setEmail("jsmith@test.edu");
+    member1.setFirstName("John");
+    member1.setLastName("Smith");
+    EmmaMember createdMember1 = EmmaApiCommands.addMember("emmaDev", member1);
+
+    EmmaMember member2 = new EmmaMember();
+    member2.setEmail("jdoe@test.edu");
+    member2.setFirstName("Jane");
+    member2.setLastName("Doe");
+    EmmaMember createdMember2 = EmmaApiCommands.addMember("emmaDev", member2);
+
+    // add both memberships
+    EmmaApiCommands.addGroupMembership("emmaDev", createdGroup.getId(), createdMember1.getId());
+    EmmaApiCommands.addGroupMembership("emmaDev", createdGroup.getId(), createdMember2.getId());
+
+    int count = new GcDbAccess().connectionName("grouper")
+        .sql("select count(*) from mock_emma_membership where group_id = ?")
+        .addBindVar(createdGroup.getId())
+        .select(int.class);
+    assertEquals(2, count);
+
+    // remove first membership
+    EmmaApiCommands.removeGroupMembership("emmaDev", createdGroup.getId(), createdMember1.getId());
+
+    count = new GcDbAccess().connectionName("grouper")
+        .sql("select count(*) from mock_emma_membership where group_id = ?")
+        .addBindVar(createdGroup.getId())
+        .select(int.class);
+    assertEquals(1, count);
+
+    count = new GcDbAccess().connectionName("grouper")
+        .sql("select count(*) from mock_emma_membership where group_id = ? and user_id = ?")
+        .addBindVar(createdGroup.getId()).addBindVar(createdMember2.getId())
+        .select(int.class);
+    assertEquals(1, count);
+
+    // remove again should not throw
+    EmmaApiCommands.removeGroupMembership("emmaDev", createdGroup.getId(), createdMember1.getId());
+
+    // remove non-existing membership should not throw
+    EmmaApiCommands.removeGroupMembership("emmaDev", createdGroup.getId(), 9999L);
+  }
+
+  public void testRetrieveMembershipsByGroup() {
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    EmmaGroup groupToCreate = new EmmaGroup();
+    groupToCreate.setName("Engineering");
+    EmmaGroup createdGroup = EmmaApiCommands.createGroup("emmaDev", groupToCreate);
+    assertNotNull(createdGroup);
+
+    EmmaMember member1 = new EmmaMember();
+    member1.setEmail("jsmith@test.edu");
+    member1.setFirstName("John");
+    member1.setLastName("Smith");
+    EmmaMember createdMember1 = EmmaApiCommands.addMember("emmaDev", member1);
+
+    EmmaMember member2 = new EmmaMember();
+    member2.setEmail("jdoe@test.edu");
+    member2.setFirstName("Jane");
+    member2.setLastName("Doe");
+    EmmaMember createdMember2 = EmmaApiCommands.addMember("emmaDev", member2);
+
+    // empty group should return empty list
+    List<EmmaMember> members = EmmaApiCommands.retrieveMembershipsByGroup("emmaDev", createdGroup.getId());
+    assertEquals(0, members.size());
+
+    // add both memberships
+    EmmaApiCommands.addGroupMembership("emmaDev", createdGroup.getId(), createdMember1.getId());
+    EmmaApiCommands.addGroupMembership("emmaDev", createdGroup.getId(), createdMember2.getId());
+
+    members = EmmaApiCommands.retrieveMembershipsByGroup("emmaDev", createdGroup.getId());
+    assertEquals(2, members.size());
+
+    Map<Long, EmmaMember> memberById = new HashMap<Long, EmmaMember>();
+    for (EmmaMember member : members) {
+      memberById.put(member.getId(), member);
     }
 
-    EmmaProvisionerTestUtils.configureEmmaProvisioner(new EmmaProvisionerTestConfigInput());
+    assertNotNull(memberById.get(createdMember1.getId()));
+    assertNotNull(memberById.get(createdMember2.getId()));
 
-    GrouperSession grouperSession = GrouperSession.startRootSession();
+    // remove one and verify the list shrinks
+    EmmaApiCommands.removeGroupMembership("emmaDev", createdGroup.getId(), createdMember1.getId());
 
-    Stem stem = new StemSave(grouperSession).assignName("test").save();
+    members = EmmaApiCommands.retrieveMembershipsByGroup("emmaDev", createdGroup.getId());
+    assertEquals(1, members.size());
+    assertEquals(createdMember2.getId(), members.get(0).getId());
+  }
 
-    Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
+  // ============================================================================
+  // End-to-end provisioning tests (require a running tomcat with the mock service)
+  // ============================================================================
 
-    testGroup.addMember(SubjectTestHelper.SUBJ0, false);
-    testGroup.addMember(SubjectTestHelper.SUBJ1, false);
+  public void testUpdateGroupNameFull() {
+    updateGroupName(true);
+  }
 
-    assignProvisioningAttribute(stem, null);
-
-    assertEquals(new Integer(0), new GcDbAccess().connectionName("grouper")
-        .sql("select count(1) from mock_emma_group").select(int.class));
-    assertEquals(0, emmaGroups().size());
-
-    GrouperProvisioningOutput grouperProvisioningOutput = fullProvision();
-
-    assertTrue(1 <= grouperProvisioningOutput.getInsert());
-
-    EmmaGroup group = onlyEmmaGroup();
-    assertEquals("test:testGroup", group.getName());
-    assertNotNull(group.getId());
-
-    // both subjects became Emma members and members of the group
-    assertEquals(2, emmaMembers().size());
-    assertEquals(2, emmaMembershipCount());
-
-    for (EmmaMembership membership : emmaMemberships()) {
-      assertEquals(group.getId().longValue(), membership.getGroupId());
-    }
-
-    // the group id is cached back onto the sync record
-    GcGrouperSync gcGrouperSync = GcGrouperSyncDao.retrieveByProvisionerName(null, defaultConfigId());
-    assertEquals(1, gcGrouperSync.getGroupCount().intValue());
-
-    GcGrouperSyncGroup gcGrouperSyncGroup = gcGrouperSync.getGcGrouperSyncGroupDao()
-        .groupRetrieveByGroupId(testGroup.getId());
-    assertEquals(testGroup.getId(), gcGrouperSyncGroup.getGroupId());
-    assertEquals(Long.toString(group.getId()), gcGrouperSyncGroup.getGroupAttributeValueCache0());
-
-    // remove a member
-    testGroup.deleteMember(SubjectTestHelper.SUBJ1);
-    fullProvision();
-
-    assertEquals(1, emmaGroups().size());
-    assertEquals(1, emmaMembershipCount());
-
-    // add a different member
-    testGroup.addMember(SubjectTestHelper.SUBJ2);
-    fullProvision();
-
-    assertEquals(1, emmaGroups().size());
-    assertEquals(2, emmaMembershipCount());
-
-    // a second full sync with nothing changed should not churn
-    GrouperProvisioningOutput steadyState = fullProvision();
-    assertEquals(0, steadyState.getInsert());
-    assertEquals(0, steadyState.getDelete());
-    assertEquals(1, emmaGroups().size());
-    assertEquals(2, emmaMembershipCount());
+  public void testUpdateGroupNameIncremental() {
+    updateGroupName(false);
   }
 
   /**
-   * renaming the Grouper group patches the Emma group_name in place rather than
-   * recreating it
+   * Emma groups carry no description, so unlike the Freshservice suite (which edits
+   * the group description) this exercises editing the group name through a rename of
+   * the Grouper group extension.
    */
-  public void testFullSyncUpdateGroupName() {
+  public void updateGroupName(boolean isFull) {
 
-    GrouperStartup.startup();
-
-    if (startTomcat) {
-      tomcatStart();
+    if (!tomcatRunTests()) {
+      return;
     }
 
-    EmmaProvisionerTestUtils.configureEmmaProvisioner(new EmmaProvisionerTestConfigInput());
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
 
-    GrouperSession grouperSession = GrouperSession.startRootSession();
-
-    Stem stem = new StemSave(grouperSession).assignName("test").save();
-    Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
-
-    assignProvisioningAttribute(stem, null);
-
-    fullProvision();
-
-    EmmaGroup group = onlyEmmaGroup();
-    assertEquals("test:testGroup", group.getName());
-    Long originalGroupId = group.getId();
-
-    // rename the Grouper group
-    new GroupSave(grouperSession).assignUuid(testGroup.getUuid())
-        .assignName("test:renamedGroup").assignSaveMode(SaveMode.INSERT_OR_UPDATE).save();
-
-    fullProvision();
-
-    group = onlyEmmaGroup();
-    // patched in place, not recreated
-    assertEquals(originalGroupId, group.getId());
-    assertEquals("test:renamedGroup", group.getName());
-  }
-
-  /**
-   * Emma keys members on email, so its /members/add endpoint upserts.  A subject
-   * that is already an Emma member (same email) must be matched and reused, not
-   * duplicated.  Here a member is pre-created in Emma before the group exists.
-   */
-  public void testFullSyncUpsertsExistingMemberByEmail() {
-
-    GrouperStartup.startup();
-
-    if (startTomcat) {
-      tomcatStart();
-    }
-
-    EmmaProvisionerTestUtils.configureEmmaProvisioner(new EmmaProvisionerTestConfigInput());
-
-    GrouperSession grouperSession = GrouperSession.startRootSession();
-
-    // pre-existing Emma member with the same email SUBJ0 will resolve to
-    EmmaMember preExisting = new EmmaMember();
-    preExisting.setId(555L);
-    preExisting.setEmail(emailForSubject(SubjectTestHelper.SUBJ0_ID));
-    preExisting.setFirstName("Old");
-    preExisting.setLastName("Name");
-    preExisting.setMemberStatusId("a");
-    HibernateSession.byObjectStatic().save(preExisting);
-
-    Stem stem = new StemSave(grouperSession).assignName("test").save();
-    Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
-    testGroup.addMember(SubjectTestHelper.SUBJ0, false);
-
-    assignProvisioningAttribute(stem, null);
-
-    fullProvision();
-
-    // still exactly one member with that email - matched, not duplicated
-    List<EmmaMember> withEmail = HibernateSession.byHqlStatic()
-        .createQuery("from EmmaMember where email = :e")
-        .setString("e", emailForSubject(SubjectTestHelper.SUBJ0_ID)).list(EmmaMember.class);
-    assertEquals(withEmail.toString(), 1, withEmail.size());
-
-    assertEquals(1, emmaMembershipCount());
-    assertEquals(555L, emmaMemberships().get(0).getUserId());
-  }
-
-  /**
-   * a change to a subject-derived member field (e.g. last name) flows through as
-   * a member update (PUT), keyed on the existing member id
-   */
-  public void testFullSyncUpdateMemberField() {
-
-    GrouperStartup.startup();
-
-    if (startTomcat) {
-      tomcatStart();
-    }
-
-    EmmaProvisionerTestUtils.configureEmmaProvisioner(new EmmaProvisionerTestConfigInput());
-
-    GrouperSession grouperSession = GrouperSession.startRootSession();
-
-    Stem stem = new StemSave(grouperSession).assignName("test").save();
-    Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
-    testGroup.addMember(SubjectTestHelper.SUBJ0, false);
-
-    assignProvisioningAttribute(stem, null);
-
-    fullProvision();
-
-    EmmaMember member = emmaMemberByEmail(emailForSubject(SubjectTestHelper.SUBJ0_ID));
-    assertNotNull("expecting the subject to have become an Emma member", member);
-    Long originalMemberId = member.getId();
-
-    // simulate the source last name changing, then re-provision
-    member.setLastName("ChangedLast");
-    HibernateSession.byObjectStatic().saveOrUpdate(member);
-
-    fullProvision();
-
-    // the member is still the same row (same id), not a new one
-    EmmaMember afterUpdate = emmaMemberByEmail(emailForSubject(SubjectTestHelper.SUBJ0_ID));
-    assertNotNull(afterUpdate);
-    assertEquals(originalMemberId, afterUpdate.getId());
-    assertEquals(1, emmaMembers().size());
-  }
-
-  /**
-   * a user-defined field, mapped through a field_&lt;name&gt; entity attribute,
-   * is provisioned into the Emma member's fields object
-   */
-  public void testFullSyncCustomField() {
-
-    GrouperStartup.startup();
-
-    if (startTomcat) {
-      tomcatStart();
-    }
-
-    // add a fifth entity attribute: field_department, a constant for the test
     EmmaProvisionerTestUtils.configureEmmaProvisioner(
         new EmmaProvisionerTestConfigInput()
-            .assignEntityAttributeCount(5)
-            .addExtraConfig("targetEntityAttribute.4.name",
-                EmmaMember.CUSTOM_FIELD_ATTRIBUTE_PREFIX + "department")
-            .addExtraConfig("targetEntityAttribute.4.translateExpressionType", "translationScript")
-            .addExtraConfig("targetEntityAttribute.4.translateExpression", "${'IT'}"));
+            .assignConfigId("emmaProvisioner")
+    );
 
-    GrouperSession grouperSession = GrouperSession.startRootSession();
-
-    Stem stem = new StemSave(grouperSession).assignName("test").save();
-    Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
-    testGroup.addMember(SubjectTestHelper.SUBJ0, false);
-
-    assignProvisioningAttribute(stem, null);
-
-    fullProvision();
-
-    EmmaMember member = emmaMemberByEmail(emailForSubject(SubjectTestHelper.SUBJ0_ID));
-    assertNotNull(member);
-    assertEquals("IT", member.getCustomFields().get("department"));
-  }
-
-  /**
-   * deleting the Grouper group deletes the Emma group, and the mock cascades the
-   * membership rows away with it
-   */
-  public void testFullSyncDeleteGroupDeletesEmmaGroup() {
+    GrouperUtil.sleep(5000);
 
     GrouperStartup.startup();
 
-    if (startTomcat) {
-      tomcatStart();
+    try {
+      // this will create tables
+      EmmaApiCommands.retrieveMembers("emmaDev");
+
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_membership").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_group").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_member").executeSql();
+
+      GrouperSession grouperSession = GrouperSession.startRootSession();
+
+      Stem stem = new StemSave(grouperSession).assignName("test").save();
+
+      Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
+
+      testGroup.addMember(SubjectTestHelper.SUBJ0, false);
+
+      // if incremental, initialize provisioner state before attaching provisioning attribute
+      if (!isFull) {
+        fullProvision();
+        incrementalProvision();
+      }
+
+      final GrouperProvisioningAttributeValue attributeValue = new GrouperProvisioningAttributeValue();
+      attributeValue.setDirectAssignment(true);
+      attributeValue.setDoProvision("emmaProvisioner");
+      attributeValue.setTargetName("emmaProvisioner");
+      attributeValue.setStemScopeString("sub");
+
+      GrouperProvisioningService.saveOrUpdateProvisioningAttributes(attributeValue, stem);
+
+      //
+      // first provision: should create group named "testGroup"
+      //
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+
+      String dbName = new GcDbAccess().connectionName("grouper")
+          .sql("select group_name from mock_emma_group").select(String.class);
+      assertEquals("testGroup", dbName);
+
+      Long groupId = new GcDbAccess().connectionName("grouper")
+          .sql("select id from mock_emma_group").select(Long.class);
+
+      EmmaGroup retrievedGroup = EmmaApiCommands.retrieveGroup("emmaDev", groupId);
+      assertNotNull(retrievedGroup);
+      assertEquals("testGroup", retrievedGroup.getName());
+
+      //
+      // rename the group extension and provision again
+      //
+      new GroupSave(grouperSession).assignUuid(testGroup.getUuid())
+          .assignName("test:testGroupRenamed")
+          .assignSaveMode(SaveMode.INSERT_OR_UPDATE).save();
+
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      // still only one group; the name should now match the renamed extension
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+
+      dbName = new GcDbAccess().connectionName("grouper")
+          .sql("select group_name from mock_emma_group").select(String.class);
+      assertEquals("testGroupRenamed", dbName);
+
+      retrievedGroup = EmmaApiCommands.retrieveGroup("emmaDev", groupId);
+      assertNotNull(retrievedGroup);
+      assertEquals("testGroupRenamed", retrievedGroup.getName());
+
+    } finally {
+
     }
-
-    EmmaProvisionerTestUtils.configureEmmaProvisioner(new EmmaProvisionerTestConfigInput());
-
-    GrouperSession grouperSession = GrouperSession.startRootSession();
-
-    Stem stem = new StemSave(grouperSession).assignName("test").save();
-    Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
-    testGroup.addMember(SubjectTestHelper.SUBJ0, false);
-
-    assignProvisioningAttribute(stem, null);
-
-    fullProvision();
-
-    assertEquals(1, emmaGroups().size());
-    assertEquals(1, emmaMembershipCount());
-
-    testGroup.delete();
-
-    fullProvision();
-
-    assertEquals(0, emmaGroups().size());
-    assertEquals(0, emmaMembershipCount());
   }
 
-  // ==================================================================
-  // incremental sync
-  // ==================================================================
+  public void testFullSyncProvisionGroupAndThenDeleteGroup() {
+    provisionGroupAndThenDeleteGroup(true);
+  }
 
-  /**
-   * the same lifecycle as testFullSyncEmma, driven off the change log
-   */
-  public void testIncrementalSyncEmma() {
+  public void testIncrementalProvisionGroupAndThenDeleteGroup() {
+    provisionGroupAndThenDeleteGroup(false);
+  }
+
+  public void provisionGroupAndThenDeleteGroup(boolean isFull) {
 
     if (!tomcatRunTests()) {
       return;
     }
 
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    EmmaProvisionerTestUtils.configureEmmaProvisioner(
+        new EmmaProvisionerTestConfigInput()
+            .assignConfigId("emmaProvisioner")
+    );
+
+    GrouperUtil.sleep(5000);
+
     GrouperStartup.startup();
 
-    if (startTomcat) {
-      tomcatStart();
+    try {
+      // this will create tables
+      EmmaApiCommands.retrieveMembers("emmaDev");
+
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_membership").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_group").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_member").executeSql();
+
+      GrouperSession grouperSession = GrouperSession.startRootSession();
+
+      Stem stem = new StemSave(grouperSession).assignName("test").save();
+
+      Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
+
+      testGroup.addMember(SubjectTestHelper.SUBJ0, false);
+      testGroup.addMember(SubjectTestHelper.SUBJ1, false);
+
+      // if incremental, initialize provisioner state before attaching provisioning attribute
+      if (!isFull) {
+        fullProvision();
+        incrementalProvision();
+      }
+
+      final GrouperProvisioningAttributeValue attributeValue = new GrouperProvisioningAttributeValue();
+      attributeValue.setDirectAssignment(true);
+      attributeValue.setDoProvision("emmaProvisioner");
+      attributeValue.setTargetName("emmaProvisioner");
+      attributeValue.setStemScopeString("sub");
+
+      GrouperProvisioningService.saveOrUpdateProvisioningAttributes(attributeValue, stem);
+
+      // assert mock tables are empty before sync
+      assertEquals(new Integer(0), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+      assertEquals(new Integer(0), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_member").select(int.class));
+      assertEquals(new Integer(0), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+      //
+      // first provision: should provision group, 2 members, 2 memberships
+      //
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+      assertEquals(new Integer(2), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_member").select(int.class));
+      assertEquals(new Integer(2), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+      String groupName = new GcDbAccess().connectionName("grouper").sql("select group_name from mock_emma_group").select(String.class);
+      assertEquals("testGroup", groupName);
+
+      //
+      // remove one member and provision again
+      //
+      testGroup.deleteMember(SubjectTestHelper.SUBJ1);
+
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+      // deleteEntitiesIfNotExistInGrouper is on, so the dropped member is archived (deleted) from Emma
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_member").select(int.class));
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+      //
+      // add a different member and provision again
+      //
+      testGroup.addMember(SubjectTestHelper.SUBJ2, false);
+
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+      assertEquals(new Integer(2), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_member").select(int.class));
+      assertEquals(new Integer(2), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+      //
+      // delete the group entirely and provision again
+      //
+      testGroup.delete();
+
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      assertEquals(new Integer(0), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+      assertEquals(new Integer(0), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+      assertEquals(new Integer(0), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_member").select(int.class));
+
+    } finally {
+
     }
-
-    EmmaProvisionerTestUtils.configureEmmaProvisioner(new EmmaProvisionerTestConfigInput());
-
-    GrouperSession grouperSession = GrouperSession.startRootSession();
-
-    // drain anything already queued so the assertions below are about our changes
-    fullProvision();
-    incrementalProvision();
-
-    Stem stem = new StemSave(grouperSession).assignName("test").save();
-    Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
-
-    testGroup.addMember(SubjectTestHelper.SUBJ0, false);
-    testGroup.addMember(SubjectTestHelper.SUBJ1, false);
-
-    assignProvisioningAttribute(stem, null);
-
-    assertEquals(0, emmaGroups().size());
-
-    incrementalProvision();
-
-    assertEquals(1, emmaGroups().size());
-    assertEquals(2, emmaMembershipCount());
-
-    EmmaGroup group = onlyEmmaGroup();
-    assertEquals("test:testGroup", group.getName());
-
-    testGroup.deleteMember(SubjectTestHelper.SUBJ1);
-    incrementalProvision();
-
-    assertEquals(1, emmaGroups().size());
-    assertEquals(1, emmaMembershipCount());
-
-    testGroup.addMember(SubjectTestHelper.SUBJ2);
-    incrementalProvision();
-
-    assertEquals(1, emmaGroups().size());
-    assertEquals(2, emmaMembershipCount());
   }
 
-  /**
-   * a group rename flows through the change log as an Emma group patch
-   */
-  public void testIncrementalSyncUpdateGroupName() {
+  public void testMemberAddRemoveReAddFull() {
+    memberAddRemoveReAdd(true);
+  }
+
+  public void testMemberAddRemoveReAddIncremental() {
+    memberAddRemoveReAdd(false);
+  }
+
+  public void memberAddRemoveReAdd(boolean isFull) {
 
     if (!tomcatRunTests()) {
       return;
     }
 
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    EmmaProvisionerTestUtils.configureEmmaProvisioner(
+        new EmmaProvisionerTestConfigInput()
+            .assignConfigId("emmaProvisioner")
+    );
+
+    GrouperUtil.sleep(5000);
+
     GrouperStartup.startup();
 
-    if (startTomcat) {
-      tomcatStart();
+    try {
+      // this will create tables
+      EmmaApiCommands.retrieveMembers("emmaDev");
+
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_membership").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_group").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_member").executeSql();
+
+      GrouperSession grouperSession = GrouperSession.startRootSession();
+
+      Stem stem = new StemSave(grouperSession).assignName("test").save();
+
+      Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
+
+      testGroup.addMember(SubjectTestHelper.SUBJ0, false);
+
+      // if incremental, initialize provisioner state before attaching provisioning attribute
+      if (!isFull) {
+        fullProvision();
+        incrementalProvision();
+      }
+
+      final GrouperProvisioningAttributeValue attributeValue = new GrouperProvisioningAttributeValue();
+      attributeValue.setDirectAssignment(true);
+      attributeValue.setDoProvision("emmaProvisioner");
+      attributeValue.setTargetName("emmaProvisioner");
+      attributeValue.setStemScopeString("sub");
+
+      GrouperProvisioningService.saveOrUpdateProvisioningAttributes(attributeValue, stem);
+
+      //
+      // first provision: group, 1 member, 1 membership
+      //
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_member").select(int.class));
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+      Long memberId = new GcDbAccess().connectionName("grouper")
+          .sql("select id from mock_emma_member").select(Long.class);
+      Long groupId = new GcDbAccess().connectionName("grouper")
+          .sql("select id from mock_emma_group").select(Long.class);
+
+      EmmaMember retrievedMember = EmmaApiCommands.retrieveMemberById("emmaDev", memberId);
+      assertNotNull(retrievedMember);
+
+      List<EmmaMember> members = EmmaApiCommands.retrieveMembershipsByGroup("emmaDev", groupId);
+      assertEquals(1, members.size());
+
+      //
+      // remove member and provision again - member archived, membership deleted
+      //
+      testGroup.deleteMember(SubjectTestHelper.SUBJ0);
+
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+      assertEquals(new Integer(0), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_member").select(int.class));
+      assertEquals(new Integer(0), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+      // commands class: member gone, no memberships
+      EmmaMember goneMember = EmmaApiCommands.retrieveMemberById("emmaDev", memberId);
+      assertNull(goneMember);
+
+      members = EmmaApiCommands.retrieveMembershipsByGroup("emmaDev", groupId);
+      assertEquals(0, members.size());
+
+      //
+      // re-add the same member and provision again - member re-created, membership re-created
+      //
+      testGroup.addMember(SubjectTestHelper.SUBJ0, false);
+
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_member").select(int.class));
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+      Long newGroupId = new GcDbAccess().connectionName("grouper")
+          .sql("select id from mock_emma_group").select(Long.class);
+      members = EmmaApiCommands.retrieveMembershipsByGroup("emmaDev", newGroupId);
+      assertEquals(1, members.size());
+
+    } finally {
+
     }
-
-    EmmaProvisionerTestUtils.configureEmmaProvisioner(new EmmaProvisionerTestConfigInput());
-
-    GrouperSession grouperSession = GrouperSession.startRootSession();
-
-    fullProvision();
-    incrementalProvision();
-
-    Stem stem = new StemSave(grouperSession).assignName("test").save();
-    Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
-
-    assignProvisioningAttribute(stem, null);
-
-    incrementalProvision();
-
-    EmmaGroup group = onlyEmmaGroup();
-    assertEquals("test:testGroup", group.getName());
-    Long originalGroupId = group.getId();
-
-    new GroupSave(grouperSession).assignUuid(testGroup.getUuid())
-        .assignName("test:renamedGroup").assignSaveMode(SaveMode.INSERT_OR_UPDATE).save();
-
-    incrementalProvision();
-
-    group = onlyEmmaGroup();
-    assertEquals(originalGroupId, group.getId());
-    assertEquals("test:renamedGroup", group.getName());
   }
 
-  // ==================================================================
-  // diagnostics
-  // ==================================================================
+  public void testFullSyncEditFirstName() {
 
-  /**
-   * the diagnostics run for this provisioner reports no errors
-   */
-  public void testDiagnostics() {
+    if (!tomcatRunTests()) {
+      return;
+    }
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    EmmaProvisionerTestUtils.configureEmmaProvisioner(
+        new EmmaProvisionerTestConfigInput()
+            .assignConfigId("emmaProvisioner")
+            .addExtraConfig("numberOfEntityAttributes", "3")
+            .addExtraConfig("targetEntityAttribute.2.name", "firstName")
+            .addExtraConfig("targetEntityAttribute.2.translateExpressionType", "grouperProvisioningEntityField")
+            .addExtraConfig("targetEntityAttribute.2.translateFromGrouperProvisioningEntityField", "subjectId")
+    );
+
+    GrouperUtil.sleep(5000);
 
     GrouperStartup.startup();
 
-    if (startTomcat) {
-      tomcatStart();
+    try {
+      // this will create tables
+      EmmaApiCommands.retrieveMembers("emmaDev");
+
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_membership").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_group").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_member").executeSql();
+
+      GrouperSession grouperSession = GrouperSession.startRootSession();
+
+      Stem stem = new StemSave(grouperSession).assignName("test").save();
+
+      Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
+
+      testGroup.addMember(SubjectTestHelper.SUBJ0, false);
+
+      final GrouperProvisioningAttributeValue attributeValue = new GrouperProvisioningAttributeValue();
+      attributeValue.setDirectAssignment(true);
+      attributeValue.setDoProvision("emmaProvisioner");
+      attributeValue.setTargetName("emmaProvisioner");
+      attributeValue.setStemScopeString("sub");
+
+      GrouperProvisioningService.saveOrUpdateProvisioningAttributes(attributeValue, stem);
+
+      //
+      // first full sync: firstName should be subject id (test.subject.0)
+      //
+      fullProvision();
+
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_member").select(int.class));
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+      String dbFirstName = new GcDbAccess().connectionName("grouper")
+          .sql("select first_name from mock_emma_member").select(String.class);
+      assertEquals("test.subject.0", dbFirstName);
+
+      Long memberId = new GcDbAccess().connectionName("grouper")
+          .sql("select id from mock_emma_member").select(Long.class);
+
+      EmmaMember retrievedMember = EmmaApiCommands.retrieveMemberById("emmaDev", memberId);
+      assertNotNull(retrievedMember);
+      assertEquals("test.subject.0", retrievedMember.getFirstName());
+
+      //
+      // change config to map firstName to subject name instead of subject id
+      //
+      new GrouperDbConfig().configFileName("grouper-loader.properties")
+          .propertyName("provisioner.emmaProvisioner.targetEntityAttribute.2.translateFromGrouperProvisioningEntityField")
+          .value("name").store();
+
+      ConfigPropertiesCascadeBase.clearCache();
+
+      GrouperUtil.sleep(7000);
+
+      //
+      // second full sync: firstName should now be subject name (my name is test.subject.0)
+      //
+      fullProvision();
+
+      dbFirstName = new GcDbAccess().connectionName("grouper")
+          .sql("select first_name from mock_emma_member").select(String.class);
+      assertEquals("my name is test.subject.0", dbFirstName);
+
+      retrievedMember = EmmaApiCommands.retrieveMemberById("emmaDev", memberId);
+      assertNotNull(retrievedMember);
+      assertEquals("my name is test.subject.0", retrievedMember.getFirstName());
+
+    } finally {
+
+    }
+  }
+
+  public void testFullSyncEditCustomFieldPennId() {
+
+    if (!tomcatRunTests()) {
+      return;
     }
 
-    EmmaProvisionerTestUtils.configureEmmaProvisioner(new EmmaProvisionerTestConfigInput());
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
 
-    GrouperSession grouperSession = GrouperSession.startRootSession();
+    // user-defined Emma fields are provisioned as attributes named field_<fieldName>
+    EmmaProvisionerTestUtils.configureEmmaProvisioner(
+        new EmmaProvisionerTestConfigInput()
+            .assignConfigId("emmaProvisioner")
+            .addExtraConfig("numberOfEntityAttributes", "3")
+            .addExtraConfig("targetEntityAttribute.2.name.elConfig", "${'field_pennId'}")
+            .addExtraConfig("targetEntityAttribute.2.translateExpressionType", "grouperProvisioningEntityField")
+            .addExtraConfig("targetEntityAttribute.2.translateFromGrouperProvisioningEntityField", "subjectId")
+    );
 
-    Stem stem = new StemSave(grouperSession).assignName("test").save();
-    Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
-    testGroup.addMember(SubjectTestHelper.SUBJ0, false);
+    GrouperUtil.sleep(5000);
 
-    assignProvisioningAttribute(stem, null);
+    GrouperStartup.startup();
 
-    fullProvision();
+    try {
+      // this will create tables
+      EmmaApiCommands.retrieveMembers("emmaDev");
 
-    assertEquals(1, emmaGroups().size());
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_membership").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_group").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_member").executeSql();
 
-    GrouperProvisioner provisioner = GrouperProvisioner.retrieveProvisioner(defaultConfigId());
-    provisioner.initialize(GrouperProvisioningType.diagnostics);
+      GrouperSession grouperSession = GrouperSession.startRootSession();
 
-    GrouperProvisioningDiagnosticsContainer diagnosticsContainer =
-        provisioner.retrieveGrouperProvisioningDiagnosticsContainer();
+      Stem stem = new StemSave(grouperSession).assignName("test").save();
 
-    diagnosticsContainer.getGrouperProvisioningDiagnosticsSettings().setDiagnosticsGroupName("test:testGroup");
-    diagnosticsContainer.getGrouperProvisioningDiagnosticsSettings()
-        .setDiagnosticsSubjectIdOrIdentifier(SubjectTestHelper.SUBJ0_ID);
-    diagnosticsContainer.getGrouperProvisioningDiagnosticsSettings().setDiagnosticsGroupsAllSelect(true);
+      Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
 
-    GrouperProvisioningOutput grouperProvisioningOutput = provisioner.provision(GrouperProvisioningType.diagnostics);
+      testGroup.addMember(SubjectTestHelper.SUBJ0, false);
 
-    assertEquals(0, grouperProvisioningOutput.getRecordsWithErrors());
-    validateNoErrors(diagnosticsContainer);
+      final GrouperProvisioningAttributeValue attributeValue = new GrouperProvisioningAttributeValue();
+      attributeValue.setDirectAssignment(true);
+      attributeValue.setDoProvision("emmaProvisioner");
+      attributeValue.setTargetName("emmaProvisioner");
+      attributeValue.setStemScopeString("sub");
+
+      GrouperProvisioningService.saveOrUpdateProvisioningAttributes(attributeValue, stem);
+
+      //
+      // first full sync: field pennId should be subject id (test.subject.0)
+      //
+      fullProvision();
+
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_member").select(int.class));
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+      // the mock stores user-defined fields as JSON in the "fields" column
+      String dbFields = new GcDbAccess().connectionName("grouper")
+          .sql("select fields from mock_emma_member").select(String.class);
+      assertNotNull(dbFields);
+      assertTrue(dbFields.contains("pennId"));
+      assertTrue(dbFields.contains("test.subject.0"));
+
+      Long memberId = new GcDbAccess().connectionName("grouper")
+          .sql("select id from mock_emma_member").select(Long.class);
+
+      EmmaMember retrievedMember = EmmaApiCommands.retrieveMemberById("emmaDev", memberId);
+      assertNotNull(retrievedMember);
+      assertNotNull(retrievedMember.getCustomFields());
+      assertEquals("test.subject.0", retrievedMember.getCustomFields().get("pennId"));
+
+      //
+      // change config to map field pennId to subject name instead of subject id
+      //
+      new GrouperDbConfig().configFileName("grouper-loader.properties")
+          .propertyName("provisioner.emmaProvisioner.targetEntityAttribute.2.translateFromGrouperProvisioningEntityField")
+          .value("name").store();
+
+      ConfigPropertiesCascadeBase.clearCache();
+
+      GrouperUtil.sleep(7000);
+
+      //
+      // second full sync: field pennId should now be subject name (my name is test.subject.0)
+      //
+      fullProvision();
+
+      dbFields = new GcDbAccess().connectionName("grouper")
+          .sql("select fields from mock_emma_member").select(String.class);
+      assertNotNull(dbFields);
+      assertTrue(dbFields.contains("pennId"));
+      assertTrue(dbFields.contains("my name is test.subject.0"));
+
+      retrievedMember = EmmaApiCommands.retrieveMemberById("emmaDev", memberId);
+      assertNotNull(retrievedMember);
+      assertNotNull(retrievedMember.getCustomFields());
+      assertEquals("my name is test.subject.0", retrievedMember.getCustomFields().get("pennId"));
+
+    } finally {
+
+    }
+  }
+
+  public void testFullSyncMatchByCustomField() {
+    matchByCustomFieldAddRemoveMembers(true);
+  }
+
+  public void testIncrementalSyncMatchByCustomField() {
+    matchByCustomFieldAddRemoveMembers(false);
+  }
+
+  /**
+   * Exercises matching an existing Emma member by email (the natural key Emma keys on)
+   * during provisioning: a member that already exists in the target should be linked
+   * and updated rather than duplicated.
+   */
+  public void matchByCustomFieldAddRemoveMembers(boolean isFull) {
+
+    if (!tomcatRunTests()) {
+      return;
+    }
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    EmmaProvisionerTestUtils.configureEmmaProvisioner(
+        new EmmaProvisionerTestConfigInput()
+            .assignConfigId("emmaProvisioner")
+    );
+
+    GrouperUtil.sleep(5000);
+
+    GrouperStartup.startup();
+
+    try {
+      // this will create tables
+      EmmaApiCommands.retrieveMembers("emmaDev");
+
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_membership").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_group").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_member").executeSql();
+
+      // pre-seed a member in the target that will match SUBJ0 by email
+      EmmaMember preexisting = new EmmaMember();
+      preexisting.setEmail("test.subject.0@example.com");
+      preexisting.setFirstName("Preexisting");
+      preexisting.setLastName("Member");
+      EmmaMember seeded = EmmaApiCommands.addMember("emmaDev", preexisting);
+      assertNotNull(seeded.getId());
+
+      GrouperSession grouperSession = GrouperSession.startRootSession();
+
+      Stem stem = new StemSave(grouperSession).assignName("test").save();
+
+      Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
+
+      testGroup.addMember(SubjectTestHelper.SUBJ0, false);
+
+      if (!isFull) {
+        fullProvision();
+        incrementalProvision();
+      }
+
+      final GrouperProvisioningAttributeValue attributeValue = new GrouperProvisioningAttributeValue();
+      attributeValue.setDirectAssignment(true);
+      attributeValue.setDoProvision("emmaProvisioner");
+      attributeValue.setTargetName("emmaProvisioner");
+      attributeValue.setStemScopeString("sub");
+
+      GrouperProvisioningService.saveOrUpdateProvisioningAttributes(attributeValue, stem);
+
+      //
+      // provision: SUBJ0 (email test.subject.0@example.com) should match the seeded member,
+      // so no duplicate is created - still exactly one member with that email
+      //
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      int matchingCount = new GcDbAccess().connectionName("grouper")
+          .sql("select count(1) from mock_emma_member where email = ?")
+          .addBindVar("test.subject.0@example.com").select(int.class);
+      assertEquals(1, matchingCount);
+
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+      // membership should reference the seeded member's id
+      List<EmmaMember> members = EmmaApiCommands.retrieveMembershipsByGroup("emmaDev",
+          new GcDbAccess().connectionName("grouper").sql("select id from mock_emma_group").select(Long.class));
+      assertEquals(1, members.size());
+      assertEquals(seeded.getId(), members.get(0).getId());
+
+      //
+      // remove the member and provision again - membership removed
+      //
+      testGroup.deleteMember(SubjectTestHelper.SUBJ0);
+
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      assertEquals(new Integer(0), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+    } finally {
+
+    }
   }
 
 }
