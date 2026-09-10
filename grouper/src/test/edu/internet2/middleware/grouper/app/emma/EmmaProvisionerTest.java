@@ -1404,4 +1404,141 @@ public class EmmaProvisionerTest extends GrouperProvisioningBaseTest {
     }
   }
 
+  public void testFullSyncLinksToExistingTargetMember() {
+    linksToExistingTargetMember(true);
+  }
+
+  public void testIncrementalSyncLinksToExistingTargetMember() {
+    linksToExistingTargetMember(false);
+  }
+
+  /**
+   * Proves the provisioner LINKS to a pre-existing target member (adopting its id and
+   * updating it in place) rather than creating a duplicate, when a member with the same
+   * matching attribute (email) already exists in the target before provisioning runs.
+   *
+   * Setup detail: entity matching is on email, and the email target attribute is translated
+   * from the subjectId so its value is known (test.subject.0 for SUBJ0). The pre-existing
+   * target row is seeded with that same email but a DIFFERENT first name; after provisioning,
+   * the single surviving member must keep the seeded id (adopted, not re-inserted) and have
+   * had its first name overwritten by the provisioned value (updated in place).
+   *
+   * We also drive firstName from the subjectId so the provisioned value is deterministic and
+   * differs from the seeded "Preexisting" value.
+   */
+  public void linksToExistingTargetMember(boolean isFull) {
+
+    if (!tomcatRunTests()) {
+      return;
+    }
+
+    // the value SUBJ0 resolves to for both email and firstName (via subjectId translation)
+    final String subj0Value = "test.subject.0";
+
+    EmmaProvisionerTestUtils.setupEmmaExternalSystem();
+
+    EmmaProvisionerTestUtils.configureEmmaProvisioner(
+        new EmmaProvisionerTestConfigInput()
+            .assignConfigId("emmaProvisioner")
+            // email translated from subjectId so the matching value is known
+            .addExtraConfig("targetEntityAttribute.1.translateFromGrouperProvisioningEntityField", "subjectId")
+            // add a firstName target attribute, also from subjectId, so provisioning overwrites
+            // the seeded "Preexisting" first name with a known, different value
+            .addExtraConfig("numberOfEntityAttributes", "3")
+            .addExtraConfig("targetEntityAttribute.2.name", "firstName")
+            .addExtraConfig("targetEntityAttribute.2.translateExpressionType", "grouperProvisioningEntityField")
+            .addExtraConfig("targetEntityAttribute.2.translateFromGrouperProvisioningEntityField", "subjectId")
+    );
+
+    GrouperUtil.sleep(5000);
+
+    GrouperStartup.startup();
+
+    try {
+      // this will create tables
+      EmmaApiCommands.retrieveMembers("emmaDev");
+
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_membership").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_group").executeSql();
+      new GcDbAccess().connectionName("grouper").sql("delete from mock_emma_member").executeSql();
+
+      // pre-seed a target member with SUBJ0's email but a distinct first name
+      EmmaMember preexisting = new EmmaMember();
+      preexisting.setEmail(subj0Value);
+      preexisting.setFirstName("Preexisting");
+      preexisting.setLastName("Member");
+      EmmaMember seeded = EmmaApiCommands.addMember("emmaDev", preexisting);
+      assertNotNull(seeded.getId());
+      final Long seededId = seeded.getId();
+
+      // confirm the seeded state before provisioning
+      EmmaMember before = EmmaApiCommands.retrieveMemberById("emmaDev", seededId);
+      assertNotNull(before);
+      assertEquals("Preexisting", before.getFirstName());
+
+      GrouperSession grouperSession = GrouperSession.startRootSession();
+
+      Stem stem = new StemSave(grouperSession).assignName("test").save();
+
+      Group testGroup = new GroupSave(grouperSession).assignName("test:testGroup").save();
+
+      testGroup.addMember(SubjectTestHelper.SUBJ0, false);
+
+      if (!isFull) {
+        fullProvision();
+        incrementalProvision();
+      }
+
+      final GrouperProvisioningAttributeValue attributeValue = new GrouperProvisioningAttributeValue();
+      attributeValue.setDirectAssignment(true);
+      attributeValue.setDoProvision("emmaProvisioner");
+      attributeValue.setTargetName("emmaProvisioner");
+      attributeValue.setStemScopeString("sub");
+
+      GrouperProvisioningService.saveOrUpdateProvisioningAttributes(attributeValue, stem);
+
+      //
+      // provision: SUBJ0 should MATCH the seeded member by email and link to it, not duplicate
+      //
+      if (isFull) {
+        fullProvision();
+      } else {
+        incrementalProvision();
+      }
+
+      // exactly one member exists in the target - no duplicate was created
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_member").select(int.class));
+
+      // and exactly one member carries SUBJ0's email
+      int matchingCount = new GcDbAccess().connectionName("grouper")
+          .sql("select count(1) from mock_emma_member where email = ?")
+          .addBindVar(subj0Value).select(int.class);
+      assertEquals(1, matchingCount);
+
+      // the surviving member is the SEEDED row (its id was adopted, not replaced)
+      Long survivingId = new GcDbAccess().connectionName("grouper")
+          .sql("select id from mock_emma_member where email = ?")
+          .addBindVar(subj0Value).select(Long.class);
+      assertEquals(seededId, survivingId);
+
+      // and it was UPDATED in place: the first name is now the provisioned value, not "Preexisting"
+      EmmaMember after = EmmaApiCommands.retrieveMemberById("emmaDev", seededId);
+      assertNotNull(after);
+      assertEquals(subj0Value, after.getFirstName());
+
+      // group and membership provisioned, membership pointing at the adopted member id
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
+      assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
+
+      Long groupId = new GcDbAccess().connectionName("grouper")
+          .sql("select id from mock_emma_group").select(Long.class);
+      List<EmmaMember> members = EmmaApiCommands.retrieveMembershipsByGroup("emmaDev", groupId);
+      assertEquals(1, members.size());
+      assertEquals(seededId, members.get(0).getId());
+
+    } finally {
+
+    }
+  }
+
 }
