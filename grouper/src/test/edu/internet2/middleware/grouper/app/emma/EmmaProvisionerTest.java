@@ -1292,9 +1292,14 @@ public class EmmaProvisionerTest extends GrouperProvisioningBaseTest {
   }
 
   /**
-   * Exercises matching an existing Emma member by email (the natural key Emma keys on)
-   * during provisioning: a member that already exists in the target should be linked
-   * and updated rather than duplicated.
+   * Exercises matching an existing Emma member during provisioning: a member that already
+   * exists in the target (keyed on email, Emma's natural key) should be linked and updated
+   * rather than duplicated.
+   *
+   * The subject's email attribute in the jdbc test source is not a stable, known value, so
+   * this test overrides the email translation to use the subjectId (test.subject.0 for
+   * SUBJ0 - the same value the edit-firstName test relies on) and seeds the pre-existing
+   * member with exactly that value. That keeps the expected email deterministic.
    */
   public void matchByCustomFieldAddRemoveMembers(boolean isFull) {
 
@@ -1302,11 +1307,16 @@ public class EmmaProvisionerTest extends GrouperProvisioningBaseTest {
       return;
     }
 
+    // the email the provisioner will resolve for SUBJ0 (subjectId), matching the seeded member
+    final String subj0Email = "test.subject.0";
+
     EmmaProvisionerTestUtils.setupEmmaExternalSystem();
 
     EmmaProvisionerTestUtils.configureEmmaProvisioner(
         new EmmaProvisionerTestConfigInput()
             .assignConfigId("emmaProvisioner")
+            // translate the email target attribute from the subjectId so the value is known
+            .addExtraConfig("targetEntityAttribute.1.translateFromGrouperProvisioningEntityField", "subjectId")
     );
 
     GrouperUtil.sleep(5000);
@@ -1323,7 +1333,7 @@ public class EmmaProvisionerTest extends GrouperProvisioningBaseTest {
 
       // pre-seed a member in the target that will match SUBJ0 by email
       EmmaMember preexisting = new EmmaMember();
-      preexisting.setEmail("test.subject.0@example.com");
+      preexisting.setEmail(subj0Email);
       preexisting.setFirstName("Preexisting");
       preexisting.setLastName("Member");
       EmmaMember seeded = EmmaApiCommands.addMember("emmaDev", preexisting);
@@ -1351,7 +1361,7 @@ public class EmmaProvisionerTest extends GrouperProvisioningBaseTest {
       GrouperProvisioningService.saveOrUpdateProvisioningAttributes(attributeValue, stem);
 
       //
-      // provision: SUBJ0 (email test.subject.0@example.com) should match the seeded member,
+      // provision: SUBJ0 (email test.subject.0) should match the seeded member,
       // so no duplicate is created - still exactly one member with that email
       //
       if (isFull) {
@@ -1362,7 +1372,7 @@ public class EmmaProvisionerTest extends GrouperProvisioningBaseTest {
 
       int matchingCount = new GcDbAccess().connectionName("grouper")
           .sql("select count(1) from mock_emma_member where email = ?")
-          .addBindVar("test.subject.0@example.com").select(int.class);
+          .addBindVar(subj0Email).select(int.class);
       assertEquals(1, matchingCount);
 
       assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
