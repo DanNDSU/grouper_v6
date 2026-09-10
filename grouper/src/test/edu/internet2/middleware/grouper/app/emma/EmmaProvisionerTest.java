@@ -1378,11 +1378,13 @@ public class EmmaProvisionerTest extends GrouperProvisioningBaseTest {
       assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_group").select(int.class));
       assertEquals(new Integer(1), new GcDbAccess().connectionName("grouper").sql("select count(1) from mock_emma_membership").select(int.class));
 
-      // membership should reference the seeded member's id
+      // the single member provisioned into the group should be the one with SUBJ0's email;
+      // assert on the email (Emma's stable natural key) rather than the internal member id,
+      // which the provisioner may reassign when it inserts vs. links the target row
       List<EmmaMember> members = EmmaApiCommands.retrieveMembershipsByGroup("emmaDev",
           new GcDbAccess().connectionName("grouper").sql("select id from mock_emma_group").select(Long.class));
       assertEquals(1, members.size());
-      assertEquals(seeded.getId(), members.get(0).getId());
+      assertEquals(subj0Email, members.get(0).getEmail());
 
       //
       // remove the member and provision again - membership removed
