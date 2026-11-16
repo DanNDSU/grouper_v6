@@ -50,12 +50,206 @@ import edu.internet2.middleware.grouperClient.util.GrouperClientUtils;
  */
 public class GrouperTeamsChannelApiCommands {
   
+  /**
+   * Manual test harness.  Fill in the shared test values below, then
+   * uncomment whichever test block(s) you want to run.
+   */
   public static void main(String[] args) {
-    
-    String configId = "entraId";
-    
+
     GrouperStartup.startup();
-    
+
+    // ------------------------------------------------------------------
+    // shared test values - edit these for your tenant
+    // ------------------------------------------------------------------
+    String configId = "entraId";                                        // grouper.azureConnector.<configId>.*
+    String teamId = "3f72b112-a4f4-4f7a-8208-e3b36d29daca";             // parent team (M365 group) id
+    String channelId = "19:69cdcf8b876a4fa38367a349082dd50a@thread.tacv2"; // existing channel id
+    String channelDisplayName = "Dan Test Channel";                 // existing channel name
+    String userId = "00000000-0000-0000-0000-000000000000";             // Entra user object id
+    String userPrincipalName = "someone@ndsu.edu";                      // Entra UPN
+    String membershipId = null;                                         // conversationMember id (null = look it up)
+
+    try {
+
+      // ================================================================
+      // 1. retrieveTeamsChannels - all channels for a set of teams
+      // ================================================================
+//      List<GrouperTeamsChannel> channels = retrieveTeamsChannels(configId,
+//          GrouperUtil.toSet(teamId), null);
+//      System.out.println("retrieveTeamsChannels: found " + channels.size());
+//      for (GrouperTeamsChannel channel : channels) {
+//        System.out.println("  " + channel.getTeamId() + " / " + channel.getId() + " / " + channel.getDisplayName());
+//      }
+
+      // with extension attributes ($select extras)
+//      List<GrouperTeamsChannel> channelsWithExtras = retrieveTeamsChannels(configId,
+//          GrouperUtil.toSet(teamId), GrouperUtil.toSet("createdDateTime", "webUrl"));
+//      System.out.println("retrieveTeamsChannels (extras): found " + channelsWithExtras.size());
+
+      // ================================================================
+      // 2. retrieveTeamsChannelsByIds - specific (teamId, channelId) pairs
+      // ================================================================
+//      List<MultiKey> teamIdChannelIds = new ArrayList<MultiKey>();
+//      teamIdChannelIds.add(new MultiKey(teamId, channelId));
+//      // a bogus id to confirm 404s are skipped quietly
+//      teamIdChannelIds.add(new MultiKey(teamId, "19:doesnotexist@thread.tacv2"));
+//      List<GrouperTeamsChannel> channelsById = retrieveTeamsChannelsByIds(configId, teamIdChannelIds, null);
+//      System.out.println("retrieveTeamsChannelsByIds: found " + channelsById.size() + " (expected 1)");
+//      for (GrouperTeamsChannel channel : channelsById) {
+//        System.out.println("  " + channel.getId() + " / " + channel.getDisplayName());
+//      }
+
+      // ================================================================
+      // 3. retrieveTeamsChannelByDisplayName
+      // ================================================================
+//      GrouperTeamsChannel channelByName = retrieveTeamsChannelByDisplayName(configId, teamId, channelDisplayName);
+//      System.out.println("retrieveTeamsChannelByDisplayName: "
+//          + (channelByName == null ? "NOT FOUND" : channelByName.getId() + " / " + channelByName.getDisplayName()));
+
+      // name with an apostrophe to exercise the '' escaping
+//      GrouperTeamsChannel channelByOddName = retrieveTeamsChannelByDisplayName(configId, teamId, "Dan's Test Channel");
+//      System.out.println("retrieveTeamsChannelByDisplayName (apostrophe): "
+//          + (channelByOddName == null ? "NOT FOUND" : channelByOddName.getId()));
+
+      // ================================================================
+      // 4. createTeamsChannels
+      // ================================================================
+//      GrouperTeamsChannel newChannel = new GrouperTeamsChannel();
+//      newChannel.setTeamId(teamId);
+//      newChannel.setDisplayName("Grouper Test " + System.currentTimeMillis());
+//      newChannel.setDescription("Created by GrouperTeamsChannelApiCommands.main");
+//      newChannel.setMembershipType("private");   // standard | private | shared
+//      Map<GrouperTeamsChannel, Set<String>> channelToFieldsToInsert = new HashMap<GrouperTeamsChannel, Set<String>>();
+//      channelToFieldsToInsert.put(newChannel, GrouperUtil.toSet("displayName", "description", "membershipType"));
+//      Map<GrouperTeamsChannel, Exception> createResults = createTeamsChannels(configId, channelToFieldsToInsert);
+//      for (GrouperTeamsChannel channel : createResults.keySet()) {
+//        Exception e = createResults.get(channel);
+//        System.out.println("createTeamsChannels: " + channel.getDisplayName() + " -> "
+//            + (e == null ? "OK, id=" + channel.getId() : "FAILED"));
+//        if (e != null) {
+//          e.printStackTrace();
+//        }
+//      }
+
+      // ================================================================
+      // 5. updateTeamsChannels (displayName/description only)
+      // ================================================================
+//      GrouperTeamsChannel channelToUpdate = new GrouperTeamsChannel();
+//      channelToUpdate.setTeamId(teamId);
+//      channelToUpdate.setId(channelId);
+//      channelToUpdate.setDescription("Updated by GrouperTeamsChannelApiCommands.main at " + new java.util.Date());
+//      Map<GrouperTeamsChannel, Set<String>> channelToFieldsToUpdate = new HashMap<GrouperTeamsChannel, Set<String>>();
+//      channelToFieldsToUpdate.put(channelToUpdate, GrouperUtil.toSet("description"));
+//      Map<GrouperTeamsChannel, Exception> updateResults = updateTeamsChannels(configId, channelToFieldsToUpdate);
+//      for (GrouperTeamsChannel channel : updateResults.keySet()) {
+//        Exception e = updateResults.get(channel);
+//        System.out.println("updateTeamsChannels: " + channel.getId() + " -> " + (e == null ? "OK" : "FAILED"));
+//        if (e != null) {
+//          e.printStackTrace();
+//        }
+//      }
+
+      // ================================================================
+      // 6. deleteTeamsChannels  *** DESTRUCTIVE - check channelId first ***
+      // ================================================================
+//      GrouperTeamsChannel channelToDelete = new GrouperTeamsChannel();
+//      channelToDelete.setTeamId(teamId);
+//      channelToDelete.setId(channelId);
+//      Map<GrouperTeamsChannel, Exception> deleteResults = deleteTeamsChannels(configId,
+//          GrouperUtil.toList(channelToDelete));
+//      for (GrouperTeamsChannel channel : deleteResults.keySet()) {
+//        Exception e = deleteResults.get(channel);
+//        System.out.println("deleteTeamsChannels: " + channel.getId() + " -> " + (e == null ? "OK" : "FAILED"));
+//        if (e != null) {
+//          e.printStackTrace();
+//        }
+//      }
+
+      // ================================================================
+      // 7. retrieveTeamsChannelMembers
+      // ================================================================
+//      List<GrouperTeamsChannelMembership> members = retrieveTeamsChannelMembers(configId, teamId, channelId);
+//      System.out.println("retrieveTeamsChannelMembers: found " + members.size());
+//      for (GrouperTeamsChannelMembership member : members) {
+//        System.out.println("  userId=" + member.getUserId() + ", membershipId=" + member.getId());
+//      }
+
+      // ================================================================
+      // 8. createTeamsChannelMemberships
+      // ================================================================
+//      Map<String, Object> addResults = createTeamsChannelMemberships(configId, teamId, channelId,
+//          GrouperUtil.toList(userId));
+//      for (String oneUserId : addResults.keySet()) {
+//        Object result = addResults.get(oneUserId);
+//        if (result instanceof Exception) {
+//          System.out.println("createTeamsChannelMemberships: " + oneUserId + " -> FAILED");
+//          ((Exception) result).printStackTrace();
+//        } else {
+//          System.out.println("createTeamsChannelMemberships: " + oneUserId + " -> OK, membershipId=" + result);
+//        }
+//      }
+
+      // ================================================================
+      // 9. deleteTeamsChannelMemberships
+      //    pass a known membershipId, or null to force the member lookup
+      // ================================================================
+//      Map<String, String> userIdToMembershipId = new LinkedHashMap<String, String>();
+//      userIdToMembershipId.put(userId, membershipId);
+//      Map<String, Exception> removeResults = deleteTeamsChannelMemberships(configId, teamId, channelId,
+//          userIdToMembershipId);
+//      for (String oneUserId : removeResults.keySet()) {
+//        Exception e = removeResults.get(oneUserId);
+//        System.out.println("deleteTeamsChannelMemberships: " + oneUserId + " -> " + (e == null ? "OK" : "FAILED"));
+//        if (e != null) {
+//          e.printStackTrace();
+//        }
+//      }
+
+      // ================================================================
+      // 10. retrieveTeamsChannelUsers(configId) - ALL Entra users
+      //     *** can be slow on a large tenant ***
+      // ================================================================
+//      List<GrouperTeamsChannelUser> allUsers = retrieveTeamsChannelUsers(configId);
+//      System.out.println("retrieveTeamsChannelUsers (all): found " + allUsers.size());
+//      for (int i = 0; i < Math.min(10, allUsers.size()); i++) {
+//        System.out.println("  " + allUsers.get(i));
+//      }
+
+      // ================================================================
+      // 11. retrieveTeamsChannelUsers(configId, values, fieldName) - targeted $batch lookup
+      // ================================================================
+      // by id (direct /users/{id} addressing)
+//      List<GrouperTeamsChannelUser> usersById = retrieveTeamsChannelUsers(configId,
+//          GrouperUtil.toList(userId), "id");
+//      System.out.println("retrieveTeamsChannelUsers (id): found " + usersById.size());
+//      for (GrouperTeamsChannelUser user : usersById) {
+//        System.out.println("  " + user);
+//      }
+
+      // by userPrincipalName (direct addressing); includes a bogus UPN to confirm 404 is skipped
+//      List<GrouperTeamsChannelUser> usersByUpn = retrieveTeamsChannelUsers(configId,
+//          GrouperUtil.toList(userPrincipalName, "nobody-" + System.currentTimeMillis() + "@ndsu.edu"),
+//          "userPrincipalName");
+//      System.out.println("retrieveTeamsChannelUsers (UPN): found " + usersByUpn.size() + " (expected 1)");
+
+      // by another attribute ($filter path), e.g. mail
+//      List<GrouperTeamsChannelUser> usersByMail = retrieveTeamsChannelUsers(configId,
+//          GrouperUtil.toList(userPrincipalName), "mail");
+//      System.out.println("retrieveTeamsChannelUsers (mail): found " + usersByMail.size());
+
+      // more than 20 values to exercise multiple $batch requests
+//      List<String> manyUpns = new ArrayList<String>();
+//      for (int i = 0; i < 25; i++) {
+//        manyUpns.add("nobody" + i + "@ndsu.edu");
+//      }
+//      manyUpns.add(userPrincipalName);
+//      List<GrouperTeamsChannelUser> usersMany = retrieveTeamsChannelUsers(configId, manyUpns, "userPrincipalName");
+//      System.out.println("retrieveTeamsChannelUsers (26 values / 2 batches): found " + usersMany.size() + " (expected 1)");
+
+    } catch (Exception e) {
+      e.printStackTrace();
+    }
+
     System.exit(0);
   }
   
@@ -366,6 +560,7 @@ public class GrouperTeamsChannelApiCommands {
    * @param channelToFieldNamesToInsert
    * @return map of channel to exception (null exception = success)
    */
+  //Not working
   public static Map<GrouperTeamsChannel, Exception> createTeamsChannels(String configId,
       Map<GrouperTeamsChannel, Set<String>> channelToFieldNamesToInsert) {
 
